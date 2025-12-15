@@ -1,0 +1,5 @@
+{
+  "name": "PlotCouncil",
+  "description": "Multi-agent assistant that reconstructs scientific plots from screenshots.",
+  "requestFramePermissions": []
+}
