@@ -26,7 +26,7 @@
 
 <br />
 
-<details open>
+<details>
 <summary><strong>English</strong></summary>
 
 > **PlotCouncil** ingests scientific figures, runs a staged agent loop (Student → Teachers → Chair), and emits high-fidelity Matplotlib code.
@@ -113,7 +113,7 @@ uvicorn main:app --reload --port 8000
 
 </details>
 
-<details>
+<details open>
 <summary><strong>简体中文</strong></summary>
 
 > **PlotCouncil** 通过多角色复核链路（学生-老师-主席）自动解析科学图表，生成高保真 Matplotlib 重绘代码。
