@@ -185,6 +185,7 @@ uvicorn main:app --reload --port 8000
 
 ```bash
 npm install
+npm run build
 npm run dev
 ```
 
