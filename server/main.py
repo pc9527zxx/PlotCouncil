@@ -15,6 +15,8 @@ from typing import Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,6 +31,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve static frontend files
+DIST_DIR = BASE_DIR.parent / "dist"
+if DIST_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
+    
+    @app.get("/")
+    def serve_frontend():
+        """Serve the frontend index.html"""
+        index_path = DIST_DIR / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path)
+        return {"message": "Frontend not built. Run 'npm run build' first."}
 
 
 class RenderRequest(BaseModel):

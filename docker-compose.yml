@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  plotcouncil:
+    build: .
+    container_name: plotcouncil
+    ports:
+      - "8032:8032"
+    environment:
+      - RENDER_TIMEOUT=30
+      - MAX_CODE_LENGTH=50000
+    volumes:
+      - ./server/artifacts:/app/server/artifacts
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8032/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

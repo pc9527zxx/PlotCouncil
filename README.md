@@ -22,6 +22,14 @@
   <a href="https://ai.google.dev/">
     <img src="https://img.shields.io/badge/Gemini-Pro-8E75B2?logo=google&logoColor=white" alt="Gemini" />
   </a>
+
+  <br /><br />
+
+  <!-- Language Toggle Buttons -->
+  <div style="margin: 20px 0;">
+    <button onclick="showLang('en')" id="btn-en" style="padding: 8px 16px; margin: 0 5px; cursor: pointer; border: 1px solid #ccc; background: #f5f5f5; border-radius: 4px;">English</button>
+    <button onclick="showLang('zh')" id="btn-zh" style="padding: 8px 16px; margin: 0 5px; cursor: pointer; border: 2px solid #4CAF50; background: #4CAF50; color: white; border-radius: 4px; font-weight: bold;">简体中文</button>
+  </div>
 </div>
 
 <br />
@@ -54,8 +62,8 @@
 
 ---
 
-<details>
-<summary><strong>English</strong></summary>
+<!-- English Content -->
+<div id="content-en" style="display: none;">
 
 > **PlotCouncil** ingests scientific figures, runs a staged agent loop (Student → Teachers → Chair), and emits high-fidelity Matplotlib code.
 
@@ -91,9 +99,33 @@
 
 ### How to install
 
+#### Option 1: Docker (Recommended)
+
+Prerequisites: Docker & Docker Compose
+
+```bash
+# Clone and start
+git clone https://github.com/pc9527zxx/PlotCouncil.git
+cd PlotCouncil
+docker-compose up -d
+
+# Access at http://localhost:8032
+# Configure your Gemini API Key in the app Settings panel
+```
+
+The Docker setup includes:
+- Multi-stage build (Node.js + Python)
+- Automatic frontend build and serving
+- Isolated Python environment with all dependencies
+- Volume mounting for persistent artifacts
+- Health checks
+- Single port (8032) for both frontend and backend
+
+#### Option 2: Manual Install
+
 Prerequisites: Node.js ≥ 20, Python ≥ 3.10
 
-#### Frontend
+**Frontend**
 
 ```bash
 npm install
@@ -101,8 +133,7 @@ npm run build
 npm run dev
 ```
 
-#### Renderer
-
+**Renderer**
 
 ```bash
 cd server
@@ -112,7 +143,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8032
 ```
 
-#### Configuration
+**Configuration**
 
 1. Create `.env.local` in the root:
    ```bash
@@ -139,10 +170,10 @@ uvicorn main:app --reload --port 8032
 * The backend executes arbitrary Matplotlib code. **Deploy with caution** (Docker/Sandbox) if exposing to public.
 * Periodically clean `server/artifacts/` to reclaim disk space.
 
-</details>
+</div>
 
-<details open>
-<summary><strong>简体中文</strong></summary>
+<!-- Chinese Content -->
+<div id="content-zh" style="display: block;">
 
 > **PlotCouncil** 通过多角色复核链路（学生-老师-主席）自动解析科学图表，生成高保真 Matplotlib 重绘代码。
 
@@ -178,9 +209,33 @@ uvicorn main:app --reload --port 8032
 
 ### 安装指南
 
+#### 方式一：Docker 部署（推荐）
+
+前置要求：Docker 和 Docker Compose
+
+```bash
+# 克隆并启动
+git clone https://github.com/pc9527zxx/PlotCouncil.git
+cd PlotCouncil
+docker-compose up -d
+
+# 访问 http://localhost:8032
+# 在应用的 Settings 面板中配置您的 Gemini API Key
+```
+
+Docker 部署包含：
+- 多阶段构建（Node.js + Python）
+- 自动前端构建和静态文件服务
+- 隔离的 Python 环境及所有依赖
+- 持久化 artifacts 目录
+- 健康检查
+- 单端口（8032）同时提供前后端服务
+
+#### 方式二：手动安装
+
 前置要求：Node.js ≥ 20, Python ≥ 3.10
 
-#### 前端
+**前端**
 
 ```bash
 npm install
@@ -188,7 +243,7 @@ npm run build
 npm run dev
 ```
 
-#### 渲染服务
+**渲染服务**
 
 ```bash
 cd server
@@ -198,7 +253,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8032
 ```
 
-#### 配置
+**配置**
 
 1. 在根目录创建 `.env.local`：
    ```bash
@@ -225,4 +280,38 @@ uvicorn main:app --reload --port 8032
 * 后端会执行任意 Matplotlib 代码。如果向公网开放，请**谨慎部署**（使用 Docker/沙箱）。
 * 定期清理 `server/artifacts/` 以回收磁盘空间。
 
-</details>
+</div>
+
+<!-- Language Toggle Script -->
+<script>
+function showLang(lang) {
+  const enContent = document.getElementById('content-en');
+  const zhContent = document.getElementById('content-zh');
+  const enBtn = document.getElementById('btn-en');
+  const zhBtn = document.getElementById('btn-zh');
+  
+  if (lang === 'en') {
+    enContent.style.display = 'block';
+    zhContent.style.display = 'none';
+    enBtn.style.border = '2px solid #4CAF50';
+    enBtn.style.background = '#4CAF50';
+    enBtn.style.color = 'white';
+    enBtn.style.fontWeight = 'bold';
+    zhBtn.style.border = '1px solid #ccc';
+    zhBtn.style.background = '#f5f5f5';
+    zhBtn.style.color = 'black';
+    zhBtn.style.fontWeight = 'normal';
+  } else {
+    enContent.style.display = 'none';
+    zhContent.style.display = 'block';
+    zhBtn.style.border = '2px solid #4CAF50';
+    zhBtn.style.background = '#4CAF50';
+    zhBtn.style.color = 'white';
+    zhBtn.style.fontWeight = 'bold';
+    enBtn.style.border = '1px solid #ccc';
+    enBtn.style.background = '#f5f5f5';
+    enBtn.style.color = 'black';
+    enBtn.style.fontWeight = 'normal';
+  }
+}
+</script>
