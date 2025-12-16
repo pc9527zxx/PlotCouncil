@@ -87,7 +87,7 @@
 ```bash
 git clone https://github.com/pc9527zxx/PlotCouncil.git
 cd PlotCouncil
-docker-compose up -d
+docker compose up -d
 # 访问 http://localhost:8032
 ```
 

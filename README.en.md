@@ -88,7 +88,7 @@ Prerequisites: Docker & Docker Compose
 ```bash
 git clone https://github.com/pc9527zxx/PlotCouncil.git
 cd PlotCouncil
-docker-compose up -d
+docker compose up -d
 # Access at http://localhost:8032
 ```
 
