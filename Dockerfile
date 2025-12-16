@@ -22,18 +22,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy Python requirements
 COPY server/requirements.txt ./server/
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r server/requirements.txt
+# Prefer prebuilt wheels to avoid native compilation and lower memory use
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_PREFER_BINARY=1
+
+# Install Python dependencies (binary wheels where possible)
+RUN pip install --no-cache-dir --prefer-binary -r server/requirements.txt
 
 # Copy server code
 COPY server/ ./server/
