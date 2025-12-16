@@ -25,6 +25,10 @@
 
   <br /><br />
 
+  <p style="margin: 8px 0;">
+    <strong>Live toggle version:</strong> <a href="docs/index.html">docs/index.html</a> (bilingual, button switch, default Chinese)
+  </p>
+
   <!-- Language Toggle Buttons -->
   <div style="margin: 20px 0;">
     <button onclick="showLang('en')" id="btn-en" style="padding: 8px 16px; margin: 0 5px; cursor: pointer; border: 1px solid #ccc; background: #f5f5f5; border-radius: 4px;">English</button>

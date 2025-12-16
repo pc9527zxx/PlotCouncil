@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PlotCouncil Docs</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0 auto; padding: 24px; max-width: 1100px; line-height: 1.6; }
+    header { text-align: center; }
+    .logo { width: 150px; border-radius: 24px; border: 1px solid #e2e8f0; }
+    .badges img { height: 24px; margin: 0 4px; }
+    .lang-toggle button { padding: 8px 14px; margin: 0 6px; cursor: pointer; border-radius: 6px; border: 1px solid #ccc; background: #f7f7f7; }
+    .lang-toggle .active { border: 2px solid #4CAF50; background: #4CAF50; color: #fff; font-weight: 700; }
+    .grid img { width: 100%; height: auto; border: 1px solid #e5e7eb; border-radius: 4px; }
+    .grid table { width: 100%; border-collapse: collapse; }
+    .grid td { padding: 8px; vertical-align: top; }
+    .muted { color: #555; font-size: 14px; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    hr { margin: 32px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="../public/plotcouncil-logo.jpeg" alt="PlotCouncil Logo" class="logo" />
+    <h1>PlotCouncil</h1>
+    <p><strong>Scientific Plot Reproduction with Multi-Agent Review</strong><br/>科研绘图复刻助手 · 多智能体复核 · Matplotlib 渲染</p>
+    <div class="badges">
+      <img src="https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript&logoColor=white" alt="TypeScript" />
+      <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React" />
+      <img src="https://img.shields.io/badge/Matplotlib-3.9-11557c?logo=python&logoColor=white" alt="Matplotlib" />
+      <img src="https://img.shields.io/badge/Gemini-Pro-8E75B2?logo=google&logoColor=white" alt="Gemini" />
+    </div>
+    <div class="lang-toggle" style="margin-top:16px;">
+      <button id="btn-zh" class="active" onclick="showLang('zh')">简体中文</button>
+      <button id="btn-en" onclick="showLang('en')">English</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="grid">
+      <h2>Example Results</h2>
+      <h3>Original Figure</h3>
+      <img src="../test/figure_example.svg" alt="Original Scientific Figure" style="max-width:100%;height:auto;border:none;" />
+      <h3>Reproduced Plots (2×3 Grid)</h3>
+      <table>
+        <tr>
+          <td><img src="../test/a.png" alt="Plot A" /><br/><a href="../test/a.py">📝 Code A</a></td>
+          <td><img src="../test/b.png" alt="Plot B" /><br/><a href="../test/b.py">📝 Code B</a></td>
+          <td><img src="../test/c.png" alt="Plot C" /><br/><a href="../test/c.py">📝 Code C</a></td>
+        </tr>
+        <tr>
+          <td><img src="../test/d.png" alt="Plot D" /><br/><a href="../test/d.py">📝 Code D</a></td>
+          <td><img src="../test/e.png" alt="Plot E" /><br/><a href="../test/e.py">📝 Code E</a></td>
+          <td><img src="../test/f.png" alt="Plot F" /><br/><a href="../test/f.py">📝 Code F</a></td>
+        </tr>
+      </table>
+      <p class="muted">Example figures from <a href="https://github.com/macromeer/scifig_plot_examples_R">macromeer/scifig_plot_examples_R</a></p>
+    </section>
+
+    <hr />
+
+    <!-- Chinese -->
+    <section id="content-zh">
+      <h2>简介</h2>
+      <p>PlotCouncil 通过学生-老师-主席多角色复核链路，自动解析科学图表并生成高保真 Matplotlib 重绘代码。</p>
+      <h3>功能特性</h3>
+      <ul>
+        <li>多智能体复核：Coder → 样式/布局/数据评审 → 主席</li>
+        <li>安全渲染：FastAPI 后端执行 Matplotlib</li>
+        <li>本地存储：项目与绘图历史存 IndexedDB</li>
+        <li>交互式工作流：拖拽上传、叠加对比、自动/手动修正循环</li>
+      </ul>
+      <h3>使用指南</h3>
+      <ol>
+        <li>上传目标图片（PNG/JPG/WEBP）。</li>
+        <li>选择模式：Simple / Complex / Manual。</li>
+        <li>点击 Run 查看渲染与代码/评审。</li>
+        <li>如不匹配，使用 Refine/Manual Fix 或增加循环。</li>
+        <li>在 History 查看快照与日志。</li>
+      </ol>
+      <h3>安装指南</h3>
+      <p><strong>方式一：Docker（推荐）</strong></p>
+      <pre><code>git clone https://github.com/pc9527zxx/PlotCouncil.git
+cd PlotCouncil
+docker-compose up -d
+# 访问 http://localhost:8032
+</code></pre>
+      <p><strong>方式二：手动</strong></p>
+      <pre><code>npm install
+npm run build
+npm run dev
+cd server
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8032
+</code></pre>
+      <p><strong>配置</strong></p>
+      <pre><code>VITE_RENDER_API_URL=http://localhost:8032/render
+# 在应用 Settings 粘贴 Gemini API Key</code></pre>
+      <h3>注意</h3>
+      <ul>
+        <li>后端执行任意 Matplotlib 代码，公网部署请加沙箱/限时。</li>
+        <li>定期清理 server/artifacts/ 释放磁盘。</li>
+      </ul>
+    </section>
+
+    <!-- English -->
+    <section id="content-en" style="display:none;">
+      <h2>Overview</h2>
+      <p>PlotCouncil parses scientific figures with a Student → Teachers → Chair loop and emits high-fidelity Matplotlib code.</p>
+      <h3>Features</h3>
+      <ul>
+        <li>Multi-agent critique: Coder → Style/Layout/Data → Chair</li>
+        <li>Safe rendering: FastAPI backend for Matplotlib</li>
+        <li>Local persistence: Projects & history in IndexedDB</li>
+        <li>Interactive workflow: drag-drop, overlay compare, auto/manual refine</li>
+      </ul>
+      <h3>Usage</h3>
+      <ol>
+        <li>Upload target image (PNG/JPG/WEBP).</li>
+        <li>Pick mode: Simple / Complex / Manual.</li>
+        <li>Click Run to view render + code/reviews.</li>
+        <li>If mismatch, use Refine/Manual Fix or raise loop count.</li>
+        <li>Use History drawer for snapshots and logs.</li>
+      </ol>
+      <h3>Install</h3>
+      <p><strong>Option 1: Docker (recommended)</strong></p>
+      <pre><code>git clone https://github.com/pc9527zxx/PlotCouncil.git
+cd PlotCouncil
+docker-compose up -d
+# Access http://localhost:8032
+</code></pre>
+      <p><strong>Option 2: Manual</strong></p>
+      <pre><code>npm install
+npm run build
+npm run dev
+cd server
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8032
+</code></pre>
+      <p><strong>Config</strong></p>
+      <pre><code>VITE_RENDER_API_URL=http://localhost:8032/render
+# Paste Gemini API Key in app Settings</code></pre>
+      <h3>Notes</h3>
+      <ul>
+        <li>Renderer executes arbitrary Matplotlib; sandbox/timeout for public exposure.</li>
+        <li>Clean server/artifacts/ periodically to reclaim disk.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    function showLang(lang) {
+      const en = document.getElementById('content-en');
+      const zh = document.getElementById('content-zh');
+      const btnEn = document.getElementById('btn-en');
+      const btnZh = document.getElementById('btn-zh');
+      if (lang === 'en') {
+        en.style.display = 'block';
+        zh.style.display = 'none';
+        btnEn.classList.add('active');
+        btnZh.classList.remove('active');
+      } else {
+        en.style.display = 'none';
+        zh.style.display = 'block';
+        btnZh.classList.add('active');
+        btnEn.classList.remove('active');
+      }
+    }
+  </script>
+</body>
+</html>
