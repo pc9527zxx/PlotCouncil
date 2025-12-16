@@ -45,6 +45,14 @@ if DIST_DIR.exists():
             return FileResponse(index_path)
         return {"message": "Frontend not built. Run 'npm run build' first."}
 
+    @app.get("/plotcouncil-logo.jpeg")
+    def serve_logo():
+        """Serve the logo referenced by the favicon/link tag."""
+        logo_path = DIST_DIR / "plotcouncil-logo.jpeg"
+        if logo_path.exists():
+            return FileResponse(logo_path)
+        return {"message": "Logo not found. Ensure frontend is built."}
+
 
 class RenderRequest(BaseModel):
     code: str = Field(..., description="Complete Python script using matplotlib")
