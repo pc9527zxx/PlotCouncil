@@ -97,6 +97,7 @@ Prerequisites: Node.js ≥ 20, Python ≥ 3.10
 
 ```bash
 npm install
+npm run build
 npm run dev
 ```
 
