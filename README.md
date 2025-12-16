@@ -26,6 +26,34 @@
 
 <br />
 
+## 📊 Example Results
+
+<div align="center">
+
+### Original Figure
+<img src="./test/figure_example.svg" alt="Original Scientific Figure" width="600" />
+
+### Reproduced Plots (2×3 Grid)
+
+<table>
+<tr>
+<td><img src="./test/a.png" alt="Plot A" width="280" /><br/><a href="./test/a.py">📝 Code A</a></td>
+<td><img src="./test/b.png" alt="Plot B" width="280" /><br/><a href="./test/b.py">📝 Code B</a></td>
+<td><img src="./test/c.png" alt="Plot C" width="280" /><br/><a href="./test/c.py">📝 Code C</a></td>
+</tr>
+<tr>
+<td><img src="./test/d.png" alt="Plot D" width="280" /><br/><a href="./test/d.py">📝 Code D</a></td>
+<td><img src="./test/e.png" alt="Plot E" width="280" /><br/><a href="./test/e.py">📝 Code E</a></td>
+<td><img src="./test/f.png" alt="Plot F" width="280" /><br/><a href="./test/f.py">📝 Code F</a></td>
+</tr>
+</table>
+
+<p><i>Example figures from <a href="https://github.com/macromeer/scifig_plot_examples_R">macromeer/scifig_plot_examples_R</a></i></p>
+
+</div>
+
+---
+
 <details>
 <summary><strong>English</strong></summary>
 
