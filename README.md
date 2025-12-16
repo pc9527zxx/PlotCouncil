@@ -103,21 +103,20 @@ npm run dev
 
 #### Renderer
 
-(Optional, for server-side Matplotlib execution)
 
 ```bash
 cd server
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8032
 ```
 
 #### Configuration
 
 1. Create `.env.local` in the root:
    ```bash
-   VITE_RENDER_API_URL=http://localhost:8000/render
+   VITE_RENDER_API_URL=http://localhost:8032/render
    ```
 2. In the app **Settings** (UI), paste your **Gemini API Key**.
    * *Keys are stored in-browser and never committed.*
@@ -191,21 +190,19 @@ npm run dev
 
 #### 渲染服务
 
-（可选，用于服务端 Matplotlib 执行）
-
 ```bash
 cd server
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8032
 ```
 
 #### 配置
 
 1. 在根目录创建 `.env.local`：
    ```bash
-   VITE_RENDER_API_URL=http://localhost:8000/render
+   VITE_RENDER_API_URL=http://localhost:8032/render
    ```
 2. 在应用 **Settings**（界面）中粘贴您的 **Gemini API Key**。
    * *Key 仅存储在浏览器中，永远不会被提交。*
