@@ -31,7 +31,7 @@
 <div align="center">
 
 ### Original Figure
-<img src="./test/figure_example.svg" alt="Original Scientific Figure" width="600" />
+<img src="./test/figure_example.svg" alt="Original Scientific Figure" width="1800" />
 
 ### Reproduced Plots (2×3 Grid)
 
