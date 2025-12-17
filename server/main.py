@@ -65,6 +65,7 @@ class RenderRequest(BaseModel):
 
 class RenderResponse(BaseModel):
     base64_png: Optional[str]
+    base64_svg: Optional[str]
     logs: str
     error: Optional[str]
     artifact_id: str
@@ -221,7 +222,7 @@ def render_plot(request: RenderRequest) -> RenderResponse:
     worker_script = _build_worker_script(request)
 
     try:
-        png_b64, logs, error_flag = _run_worker_script(worker_script, request.timeout)
+        png_b64, svg_b64, logs, error_flag = _run_worker_script(worker_script, request.timeout)
     except subprocess.TimeoutExpired as exc:
         raise HTTPException(status_code=504, detail="Renderer timed out.") from exc
     except FileNotFoundError as exc:
@@ -233,6 +234,7 @@ def render_plot(request: RenderRequest) -> RenderResponse:
 
     return RenderResponse(
         base64_png=png_b64,
+        base64_svg=svg_b64,
         logs=logs,
         error=error_flag,
         artifact_id=artifact_id,
@@ -300,7 +302,7 @@ def _build_worker_script(req: RenderRequest) -> str:
         user_code = {safe_code_literal}
 
         log_stream = io.StringIO()
-        payload = {{"png": None, "logs": "", "error": None}}
+        payload = {{"png": None, "svg": None, "logs": "", "error": None}}
 
         with redirect_stdout(log_stream), redirect_stderr(log_stream):
             try:
@@ -399,6 +401,11 @@ def _build_worker_script(req: RenderRequest) -> str:
                 buffer = io.BytesIO()
                 fig.savefig(buffer, format="png", bbox_inches="tight")
                 payload["png"] = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                
+                # Also save as SVG
+                svg_buffer = io.BytesIO()
+                fig.savefig(svg_buffer, format="svg", bbox_inches="tight")
+                payload["svg"] = base64.b64encode(svg_buffer.getvalue()).decode("utf-8")
 
                 if pixel_std < 2.0 or center_std < 2.0:
                     payload["error"] = "BLANK_PLOT"
@@ -443,8 +450,11 @@ def _build_worker_script(req: RenderRequest) -> str:
     ).strip()
 
 
-def _run_worker_script(script: str, timeout: float) -> Tuple[Optional[str], str, Optional[str]]:
-    """Run the generated worker script and capture its output."""
+def _run_worker_script(script: str, timeout: float) -> Tuple[Optional[str], Optional[str], str, Optional[str]]:
+    """Run the generated worker script and capture its output.
+    
+    Returns: (png_b64, svg_b64, logs, error)
+    """
     python_bin = _resolve_python_binary()
     with tempfile.TemporaryDirectory(prefix="plotcouncil-worker-") as tmpdir:
         worker_path = Path(tmpdir) / "worker.py"
@@ -478,7 +488,7 @@ def _run_worker_script(script: str, timeout: float) -> Tuple[Optional[str], str,
     if stderr:
         logs = (logs + ("\n" if logs else "") + stderr)
 
-    return payload.get("png"), logs, payload.get("error")
+    return payload.get("png"), payload.get("svg"), logs, payload.get("error")
 
 
 def _persist_artifacts(artifact_id: str, worker_code: str, png_b64: Optional[str], logs: str) -> None:

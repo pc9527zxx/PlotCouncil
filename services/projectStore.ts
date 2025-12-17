@@ -1,5 +1,5 @@
 import { openDB, type DBSchema } from 'idb';
-import { Project, PlotSnapshot, PlotImage, AnalysisResult } from '../types';
+import { Project, PlotSnapshot, PlotImage, AnalysisResult, CodeVersion, WorkflowLogEntry } from '../types';
 
 export interface ModelConfig {
   id: string;
@@ -69,11 +69,42 @@ export const createEmptyProject = (name: string): Project => {
     result: null,
     errorMessage: '',
     plotHistory: [],
+    codeHistory: [],
+    workflowLogs: [],
     renderCount: 0,
     generatedPlotBase64: null,
+    generatedSvgBase64: null,
     renderLogs: '',
     renderError: '',
   };
+};
+
+const normalizeCodeHistory = (items: any): CodeVersion[] => {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter(Boolean)
+    .map((v: any, index: number) => ({
+      id: typeof v?.id === 'string' ? v.id : `${Date.now()}-${index}`,
+      code: typeof v?.code === 'string' ? v.code : '',
+      timestamp: typeof v?.timestamp === 'number' ? v.timestamp : Date.now(),
+      source: v?.source === 'revision' ? 'revision' : 'student',
+      iteration: typeof v?.iteration === 'number' ? v.iteration : index,
+    } as CodeVersion))
+    .filter(v => Boolean(v.code));
+};
+
+const normalizeWorkflowLogs = (items: any): WorkflowLogEntry[] => {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter(Boolean)
+    .map((v: any) => ({
+      timestamp: typeof v?.timestamp === 'number' ? v.timestamp : Date.now(),
+      type: ['info', 'success', 'warning', 'error', 'agent'].includes(v?.type) ? v.type : 'info',
+      agent: typeof v?.agent === 'string' ? v.agent : undefined,
+      message: typeof v?.message === 'string' ? v.message : '',
+      details: typeof v?.details === 'string' ? v.details : undefined,
+    } as WorkflowLogEntry))
+    .filter(v => Boolean(v.message));
 };
 
 const normalizeProject = (raw: any): Project | null => {
@@ -81,6 +112,8 @@ const normalizeProject = (raw: any): Project | null => {
   if (typeof raw.id !== 'string' || typeof raw.name !== 'string') return null;
   const now = Date.now();
   const plotHistory = normalizePlotHistory(raw.plotHistory);
+  const codeHistory = normalizeCodeHistory(raw.codeHistory);
+  const workflowLogs = normalizeWorkflowLogs(raw.workflowLogs);
   const maxSeq = plotHistory.reduce((acc, s) => Math.max(acc, s.seq || 0), 0);
   const renderCount = typeof raw.renderCount === 'number' && Number.isFinite(raw.renderCount)
     ? Math.max(raw.renderCount, maxSeq)
@@ -95,8 +128,11 @@ const normalizeProject = (raw: any): Project | null => {
     result: raw.result ?? null,
     errorMessage: typeof raw.errorMessage === 'string' ? raw.errorMessage : '',
     plotHistory,
+    codeHistory,
+    workflowLogs,
     renderCount,
     generatedPlotBase64: typeof raw.generatedPlotBase64 === 'string' ? raw.generatedPlotBase64 : null,
+    generatedSvgBase64: typeof raw.generatedSvgBase64 === 'string' ? raw.generatedSvgBase64 : null,
     renderLogs: typeof raw.renderLogs === 'string' ? raw.renderLogs : '',
     renderError: typeof raw.renderError === 'string' ? raw.renderError : '',
   };

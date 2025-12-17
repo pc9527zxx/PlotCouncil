@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { AnalysisResult, AnalysisStatus, TeacherReview, ChairDecision } from "../types";
+import { AnalysisResult, AnalysisStatus, AnalysisUpdate, TeacherReview, ChairDecision } from "../types";
 import { STUDENT_INSTRUCTION, TEACHER_STYLE_INSTRUCTION, TEACHER_LAYOUT_INSTRUCTION, TEACHER_DATA_INSTRUCTION, CHAIR_QA_INSTRUCTION, CHAIR_STRATEGY_INSTRUCTION, STUDENT_REVISION_INSTRUCTION, REVIEWER_LITE_INSTRUCTION } from "./prompts";
 
 // ============================================================================
@@ -22,13 +22,25 @@ interface ContentPart {
 const isOpenAICompatible = (baseUrl?: string): boolean => {
   if (!baseUrl) return false;
   const url = baseUrl.toLowerCase();
-  return url.includes('/v1') || 
+  
+  // Google APIs are NOT OpenAI-compatible, even though they have /v1beta
+  if (url.includes('googleapis.com') || url.includes('generativelanguage')) {
+    return false;
+  }
+  
+  // Check for OpenAI-compatible patterns
+  // /v1/ or /v1 at end (not /v1beta which is Google)
+  const hasV1 = url.includes('/v1/') || url.endsWith('/v1') || url.includes('/v1?');
+  
+  return hasV1 || 
          url.includes('openai') || 
          url.includes('siliconflow') ||
          url.includes('openrouter') ||
          url.includes('together') ||
          url.includes('groq') ||
-         url.includes('deepseek');
+         url.includes('deepseek') ||
+         url.includes('api.mistral') ||
+         url.includes('api.anthropic');
 };
 
 // Convert Google-style parts to OpenAI messages
@@ -296,7 +308,7 @@ export const analyzePlotImage = async (
   mimeType: string, 
   modelName: string,
   customApiKey?: string,
-  onStatusUpdate?: (status: any) => void,
+  onUpdate?: (update: AnalysisUpdate) => void,
   customBaseUrl?: string
 ): Promise<AnalysisResult> => {
   const finalApiKey = customApiKey?.trim() || process.env.API_KEY;
@@ -312,7 +324,7 @@ export const analyzePlotImage = async (
   };
 
   try {
-    if (onStatusUpdate) onStatusUpdate('ANALYZING'); 
+    if (onUpdate) onUpdate({ status: AnalysisStatus.ANALYZING }); 
     
     console.log("Phase 1: Student Agent (Coder) Starting...");
     const parts: ContentPart[] = [
@@ -344,7 +356,7 @@ export const refinePlotAnalysis = async (
   feedback: { type: 'image' | 'error', data: string, mimeType?: string },
   modelName: string,
   customApiKey?: string,
-  onStatusUpdate?: (status: any) => void,
+  onUpdate?: (update: AnalysisUpdate) => void,
   options?: { preset?: 'lite' | 'full' },
   customBaseUrl?: string
 ): Promise<AnalysisResult> => {
@@ -380,7 +392,7 @@ export const refinePlotAnalysis = async (
     // LITE PRESET: Student (initial) -> Lite Reviewer -> Student (revision)
     // ========================================================================
     if (preset === 'lite') {
-      if (onStatusUpdate) onStatusUpdate(AnalysisStatus.CHAIR_QA);
+      if (onUpdate) onUpdate({ status: AnalysisStatus.CHAIR_QA });
       const liteSummary = await universalGenerate(config, buildCompareParts(), REVIEWER_LITE_INSTRUCTION, 0.1);
 
       const liteJson = extractJsonFromText(liteSummary);
@@ -407,12 +419,43 @@ export const refinePlotAnalysis = async (
         { role: 'QA', summary: liteSummary, priorityFixes }
       ];
 
-      if (onStatusUpdate) onStatusUpdate(AnalysisStatus.REFINING);
+      // Send partial result with chair findings immediately
+      if (onUpdate) {
+        onUpdate({
+          status: AnalysisStatus.REFINING,
+          partialResult: {
+            chairFindings,
+            qaStatus,
+            riskScore,
+          }
+        });
+      }
+      
+      // Build student prompt parts - INCLUDE IMAGES for visual reference!
       const studentParts: ContentPart[] = [
-        { text: `CURRENT PYTHON CODE:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` },
-        { text: `LITE REVIEWER SUMMARY:\n${liteSummary}` },
-        ...(studentBrief ? [{ text: `STUDENT BRIEF:\n${studentBrief}` }] : []),
+        { text: "## ORIGINAL TARGET IMAGE (you must replicate this):" },
+        { inlineData: { mimeType: originalImageMime, data: originalImageBase64 } },
       ];
+      
+      // Add student render if available
+      if (feedback.type === 'image' && feedback.mimeType) {
+        studentParts.push({ text: "## YOUR CURRENT RENDER (fix the issues found by reviewer):" });
+        studentParts.push({ inlineData: { mimeType: feedback.mimeType, data: feedback.data } });
+      }
+      
+      studentParts.push(
+        { text: `## CURRENT PYTHON CODE:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` },
+        { text: `## LITE REVIEWER SUMMARY (must address ALL issues):\n${liteSummary}` },
+        ...(studentBrief ? [{ text: `## STUDENT BRIEF:\n${studentBrief}` }] : []),
+        { text: `
+## ⚠️ IMPORTANT INSTRUCTIONS:
+1. You MUST fix ALL issues listed in the reviewer summary
+2. Look at the ORIGINAL TARGET IMAGE carefully for visual reference
+3. Compare your render with the original to understand the exact visual differences
+4. Output COMPLETE, RUNNABLE code - not just the changed parts
+5. Make sure your code produces output that matches the ORIGINAL, not your previous render
+` }
+      );
 
       const studentRevisionText = await universalGenerate(config, studentParts, STUDENT_REVISION_INSTRUCTION, 0.05);
       if (!studentRevisionText) throw new Error("Student Coder returned an empty response.");
@@ -451,18 +494,26 @@ export const refinePlotAnalysis = async (
 
     const teacherReviews: TeacherReview[] = [];
     for (const agent of teacherAgents) {
-      if (onStatusUpdate) onStatusUpdate(agent.status);
+      if (onUpdate) onUpdate({ status: agent.status });
       const responseText = await universalGenerate(config, buildTeacherPromptParts(), agent.instruction, 0.1);
       teacherReviews.push({
         role: agent.role,
         findings: responseText || ''
       });
+      // Send incremental update after each teacher completes
+      if (onUpdate) {
+        onUpdate({
+          partialResult: {
+            teacherReviews: [...teacherReviews],
+          }
+        });
+      }
     }
 
     // ========================================================================
     // CHAIR QA SYNTHESIS
     // ========================================================================
-    if (onStatusUpdate) onStatusUpdate(AnalysisStatus.CHAIR_QA);
+    if (onUpdate) onUpdate({ status: AnalysisStatus.CHAIR_QA });
     const teacherJson = JSON.stringify(teacherReviews, null, 2);
     const qaParts: ContentPart[] = [
       { text: `TEACHER REVIEWS:\n${teacherJson}` },
@@ -492,10 +543,21 @@ export const refinePlotAnalysis = async (
       { role: 'QA', summary: qaSummary, priorityFixes: qaPriorityFixes }
     ];
 
+    // Send Chair QA update
+    if (onUpdate) {
+      onUpdate({
+        partialResult: {
+          chairFindings: [...chairFindings],
+          qaStatus,
+          riskScore: qaRisk,
+        }
+      });
+    }
+
     // ========================================================================
     // CHAIR STRATEGY (Brief for Student)
     // ========================================================================
-    if (onStatusUpdate) onStatusUpdate(AnalysisStatus.CHAIR_STRATEGY);
+    if (onUpdate) onUpdate({ status: AnalysisStatus.CHAIR_STRATEGY });
     const strategyParts: ContentPart[] = [
       { text: `TEACHER REVIEWS:\n${teacherJson}` },
       { text: `QA SUMMARY:\n${qaSummary}` }
@@ -513,16 +575,42 @@ export const refinePlotAnalysis = async (
       : undefined;
     chairFindings.push({ role: 'STRATEGY', summary: strategySummary, priorityFixes: strategyActions });
 
-    // ========================================================================
-    // STUDENT REVISION (Code Fixes)
-    // ========================================================================
-    if (onStatusUpdate) onStatusUpdate(AnalysisStatus.REFINING);
+    // Send Chair Strategy update
+    if (onUpdate) {
+      onUpdate({
+        status: AnalysisStatus.REFINING,
+        partialResult: {
+          chairFindings: [...chairFindings],
+        }
+      });
+    }
+    
+    // Build student prompt parts - INCLUDE IMAGES for visual reference!
     const studentParts: ContentPart[] = [
-      { text: `CURRENT PYTHON CODE:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` },
-      { text: `TEACHER REVIEWS:\n${teacherJson}` },
-      { text: `QA SUMMARY:\n${qaSummary}` },
-      { text: `CHAIR STRATEGY BRIEF:\n${strategySummary}` }
+      { text: "## ORIGINAL TARGET IMAGE (you must replicate this):" },
+      { inlineData: { mimeType: originalImageMime, data: originalImageBase64 } },
     ];
+    
+    // Add student render if available
+    if (feedback.type === 'image' && feedback.mimeType) {
+      studentParts.push({ text: "## YOUR CURRENT RENDER (fix the issues found by reviewers):" });
+      studentParts.push({ inlineData: { mimeType: feedback.mimeType, data: feedback.data } });
+    }
+    
+    studentParts.push(
+      { text: `## CURRENT PYTHON CODE:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` },
+      { text: `## TEACHER REVIEWS (must address ALL issues):\n${teacherJson}` },
+      { text: `## QA SUMMARY:\n${qaSummary}` },
+      { text: `## CHAIR STRATEGY BRIEF (your action items):\n${strategySummary}` },
+      { text: `
+## ⚠️ IMPORTANT INSTRUCTIONS:
+1. You MUST fix ALL issues listed in the teacher reviews and chair strategy
+2. Look at the ORIGINAL TARGET IMAGE carefully for visual reference
+3. Compare your render with the original to understand the exact visual differences
+4. Output COMPLETE, RUNNABLE code - not just the changed parts
+5. Make sure your code produces output that matches the ORIGINAL, not your previous render
+` }
+    );
 
     const studentRevisionText = await universalGenerate(config, studentParts, STUDENT_REVISION_INSTRUCTION, 0.05);
     if (!studentRevisionText) throw new Error("Student Coder returned an empty response.");

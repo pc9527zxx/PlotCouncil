@@ -1,28 +1,34 @@
 import React, { useState } from 'react';
 import { AnalysisStatus, PlotImage } from '../types';
-import { Download, ZoomIn, ZoomOut, Maximize2, Eye, EyeOff, Loader2, Terminal, Layers, Gavel, CheckCircle2, ArrowRight, Image as ImageIcon, RefreshCw } from 'lucide-react';
+import { Download, ZoomIn, ZoomOut, Maximize2, Eye, EyeOff, Loader2, Terminal, Layers, Gavel, CheckCircle2, ArrowRight, Image as ImageIcon, RefreshCw, FileImage, FileCode } from 'lucide-react';
 import { PyodidePlot } from './PyodidePlot';
 import { ToastType } from './Toast';
 
 interface OutputPanelProps {
   status: AnalysisStatus;
   generatedPlotBase64?: string | null;
+  generatedSvgBase64?: string | null;
   setGeneratedPlotBase64?: any;
+  setGeneratedSvgBase64?: any;
   renderLogs?: string;
   setRenderLogs?: any;
   renderError?: string;
   setRenderError?: any;
-  onPlotRendered?: (base64Png: string) => void;
+  onPlotRendered?: (base64Png: string, svgBase64?: string) => void;
   onPlotRuntimeError?: (errorText: string) => void;
   pythonCode: string;
   selectedImage: PlotImage | null;
   onShowToast: (msg: string, type: ToastType) => void;
+  projectName?: string;
+  codeIteration?: number;
 }
 
 export const OutputPanel: React.FC<OutputPanelProps> = ({
   status,
   generatedPlotBase64,
+  generatedSvgBase64,
   setGeneratedPlotBase64,
+  setGeneratedSvgBase64,
   renderLogs,
   setRenderLogs,
   renderError,
@@ -31,7 +37,9 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   onPlotRuntimeError,
   pythonCode,
   selectedImage,
-  onShowToast
+  onShowToast,
+  projectName = 'plot',
+  codeIteration = 0
 }) => {
   const [overlayOpacity, setOverlayOpacity] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -44,13 +52,43 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   const isChair = status.includes('CHAIR');
   const isDone = status === AnalysisStatus.SUCCESS;
 
-  const downloadImage = () => {
+  // Generate filename with timestamp and iteration
+  const generateFilename = (ext: 'png' | 'svg' | 'py') => {
+    const safeName = projectName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').slice(0, 30);
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    const iteration = codeIteration > 0 ? `_v${codeIteration}` : '';
+    return `${safeName}${iteration}_${timestamp}.${ext}`;
+  };
+
+  const downloadPng = () => {
     if (!generatedPlotBase64) return;
     const link = document.createElement('a');
     link.href = `data:image/png;base64,${generatedPlotBase64}`;
-    link.download = 'plotcouncil-result.png';
+    link.download = generateFilename('png');
     link.click();
-    onShowToast("Image downloaded successfully", "success");
+    onShowToast("PNG image downloaded", "success");
+  };
+
+  const downloadSvg = () => {
+    if (!generatedSvgBase64) return;
+    const link = document.createElement('a');
+    // SVG is base64 encoded, decode it
+    const svgData = atob(generatedSvgBase64);
+    const blob = new Blob([svgData], { type: 'image/svg+xml' });
+    link.href = URL.createObjectURL(blob);
+    link.download = generateFilename('svg');
+    link.click();
+    onShowToast("SVG image downloaded", "success");
+  };
+
+  const downloadCode = () => {
+    if (!pythonCode) return;
+    const blob = new Blob([pythonCode], { type: 'text/plain' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = generateFilename('py');
+    link.click();
+    onShowToast("Python script downloaded", "success");
   };
 
   const handleRerun = () => {
@@ -86,10 +124,37 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                  <span>Rerun</span>
                </button>
             )}
+            
+            {/* Download Buttons */}
             {generatedPlotBase64 && (
-              <button onClick={downloadImage} className="p-1 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded text-slate-400 transition-colors" title="Download">
-                <Download className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-0.5 bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-md px-1">
+                <button 
+                  onClick={downloadPng} 
+                  className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-700 rounded text-slate-500 hover:text-indigo-600 transition-colors flex items-center gap-1" 
+                  title="Download PNG"
+                >
+                  <FileImage className="w-3.5 h-3.5" />
+                  <span className="text-[9px] font-semibold">PNG</span>
+                </button>
+                {generatedSvgBase64 && (
+                  <button 
+                    onClick={downloadSvg} 
+                    className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-700 rounded text-slate-500 hover:text-emerald-600 transition-colors flex items-center gap-1" 
+                    title="Download SVG"
+                  >
+                    <FileCode className="w-3.5 h-3.5" />
+                    <span className="text-[9px] font-semibold">SVG</span>
+                  </button>
+                )}
+                <button 
+                  onClick={downloadCode} 
+                  className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-700 rounded text-slate-500 hover:text-amber-600 transition-colors flex items-center gap-1 border-l border-slate-200 dark:border-zinc-700 ml-1 pl-1.5" 
+                  title="Download Python Script"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="text-[9px] font-semibold">.py</span>
+                </button>
+              </div>
             )}
          </div>
       </div>
@@ -155,13 +220,15 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                     refreshTrigger={refreshTrigger}
                     autorun={!!pythonCode && !generatedPlotBase64}
                     initialImageBase64={generatedPlotBase64}
+                    initialSvgBase64={generatedSvgBase64}
                     initialLogs={renderLogs}
                     initialError={renderError}
                     onStatusChange={(s) => setIsRenderRunning(s === 'running')}
-                    onRenderComplete={(base64, logs) => {
+                    onRenderComplete={(base64, logs, svgBase64) => {
                       setGeneratedPlotBase64?.(base64);
+                      setGeneratedSvgBase64?.(svgBase64 || null);
                       setRenderLogs?.(logs);
-                      onPlotRendered?.(base64);
+                      onPlotRendered?.(base64, svgBase64);
                     }}
                     onRuntimeError={(err, logs) => {
                       setRenderError?.(err);

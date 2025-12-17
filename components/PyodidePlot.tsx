@@ -5,10 +5,11 @@ interface BackendPlotProps {
   code: string;
   autorun?: boolean;
   initialImageBase64?: string | null;
+  initialSvgBase64?: string | null;
   initialLogs?: string;
   initialError?: string;
   refreshTrigger?: number;
-  onRenderComplete?: (base64Image: string, logs: string) => void;
+  onRenderComplete?: (base64Image: string, logs: string, svgBase64?: string) => void;
   onRuntimeError?: (error: string, logs: string) => void;
   onStatusChange?: (status: "idle" | "running" | "error" | "success") => void;
 }
@@ -34,6 +35,7 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
   code,
   autorun = true,
   initialImageBase64 = null,
+  initialSvgBase64 = null,
   initialLogs = "",
   initialError = "",
   refreshTrigger = 0,
@@ -43,6 +45,7 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
 }) => {
   const [status, setStatus] = useState<RenderStatus>("idle");
   const [imageBase64, setImageBase64] = useState<string | null>(initialImageBase64);
+  const [svgBase64, setSvgBase64] = useState<string | null>(initialSvgBase64);
 
   // Notify parent of status changes
   useEffect(() => {
@@ -52,8 +55,9 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
   // Sync initial props (e.g. switching projects)
   useEffect(() => {
     setImageBase64(initialImageBase64);
+    setSvgBase64(initialSvgBase64);
     setStatus(initialError ? "error" : (initialImageBase64 ? "success" : "idle"));
-  }, [initialImageBase64, initialError]);
+  }, [initialImageBase64, initialSvgBase64, initialError]);
 
   const runBackendRender = async () => {
     if (!code.trim()) return;
@@ -94,11 +98,18 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
 
       const combinedLogs = payload?.logs ?? "";
       const resultBase64 = payload?.base64_png;
+      const resultSvgBase64 = payload?.base64_svg;
       
       if (resultBase64) {
         setImageBase64(resultBase64);
       } else {
         setImageBase64(null);
+      }
+      
+      if (resultSvgBase64) {
+        setSvgBase64(resultSvgBase64);
+      } else {
+        setSvgBase64(null);
       }
 
       if (!response.ok || payload?.error || !resultBase64) {
@@ -109,7 +120,7 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
       }
 
       setStatus("success");
-      onRenderComplete?.(resultBase64, combinedLogs);
+      onRenderComplete?.(resultBase64, combinedLogs, resultSvgBase64);
     } catch (err: any) {
       clearTimeout(timeoutId);
       let message = err?.message || "Renderer call failed.";

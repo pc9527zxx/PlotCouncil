@@ -101,7 +101,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const isOpenAICompatible = (baseUrl?: string): boolean => {
     if (!baseUrl) return false;
     const url = baseUrl.toLowerCase();
-    return url.includes('/v1') || 
+    
+    // Google APIs are NOT OpenAI-compatible
+    if (url.includes('googleapis.com') || url.includes('generativelanguage')) {
+      return false;
+    }
+    
+    const hasV1 = url.includes('/v1/') || url.endsWith('/v1') || url.includes('/v1?');
+    return hasV1 || 
            url.includes('openai') || 
            url.includes('siliconflow') ||
            url.includes('openrouter') ||

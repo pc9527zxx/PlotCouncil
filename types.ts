@@ -29,6 +29,12 @@ export interface AnalysisResult {
   timestamp: number;
 }
 
+// Callback for incremental updates during analysis
+export interface AnalysisUpdate {
+  status?: AnalysisStatus;
+  partialResult?: Partial<AnalysisResult>;
+}
+
 export enum AnalysisStatus {
   IDLE = 'IDLE',
   ANALYZING = 'ANALYZING', // Student Phase
@@ -152,6 +158,25 @@ export interface PlotSnapshot {
   seq: number;
 }
 
+export interface CodeVersion {
+  id: string;
+  code: string;
+  timestamp: number;
+  source: 'student' | 'revision';  // 来源：初始生成 或 修订
+  iteration: number;  // 迭代轮次
+  renderedImage?: string;  // 渲染结果 base64 PNG
+  renderedSvg?: string;  // 渲染结果 SVG
+}
+
+// 工作流日志条目
+export interface WorkflowLogEntry {
+  timestamp: number;
+  type: 'info' | 'success' | 'warning' | 'error' | 'agent';
+  agent?: string;  // 当前执行的 agent
+  message: string;
+  details?: string;  // 额外详情
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -161,8 +186,11 @@ export interface Project {
   result: AnalysisResult | null;
   errorMessage: string;
   plotHistory: PlotSnapshot[];
+  codeHistory: CodeVersion[];  // 代码版本历史
+  workflowLogs: WorkflowLogEntry[];  // 工作流日志
   renderCount: number;
   generatedPlotBase64: string | null;
+  generatedSvgBase64: string | null;  // SVG 渲染结果
   renderLogs: string;
   renderError: string;
   // Runtime status (per-project)

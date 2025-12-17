@@ -8,7 +8,7 @@ import { DocsPanel } from './components/DocsPanel';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toast, ToastItem, ToastType } from './components/Toast';
 import { analyzePlotImage, refinePlotAnalysis } from './services/geminiService';
-import { PlotImage, AnalysisResult, AnalysisStatus, Project, PlotSnapshot } from './types';
+import { PlotImage, AnalysisResult, AnalysisStatus, AnalysisUpdate, Project, PlotSnapshot, CodeVersion, WorkflowLogEntry } from './types';
 import { 
   loadProjectsSnapshot, 
   migrateLegacyLocalStorageToIDB, 
@@ -88,8 +88,10 @@ export default function App() {
   const result = activeProject?.result ?? null;
   const errorMessage = activeProject?.errorMessage ?? '';
   const plotHistory = activeProject?.plotHistory ?? [];
+  const workflowLogs = activeProject?.workflowLogs ?? [];
   const renderCount = activeProject?.renderCount ?? 0;
   const generatedPlotBase64 = activeProject?.generatedPlotBase64 ?? null;
+  const generatedSvgBase64 = activeProject?.generatedSvgBase64 ?? null;
   const renderLogs = activeProject?.renderLogs ?? '';
   const renderError = activeProject?.renderError ?? '';
 
@@ -144,6 +146,10 @@ export default function App() {
     updateActiveProject({ generatedPlotBase64: base64 });
   }, [updateActiveProject]);
 
+  const setGeneratedSvgBase64 = useCallback((base64: string | null) => {
+    updateActiveProject({ generatedSvgBase64: base64 });
+  }, [updateActiveProject]);
+
   const setRenderLogs = useCallback((logs: string) => {
     updateActiveProject({ renderLogs: logs });
   }, [updateActiveProject]);
@@ -151,6 +157,97 @@ export default function App() {
   const setRenderError = useCallback((err: string) => {
     updateActiveProject({ renderError: err });
   }, [updateActiveProject]);
+
+  // Helper to extract code and save to history
+  const extractAndSaveCode = useCallback((
+    projectId: string, 
+    markdown: string, 
+    source: 'student' | 'revision'
+  ) => {
+    const codeMatch = markdown.match(/```python([\s\S]*?)```/i);
+    const code = codeMatch ? codeMatch[1].trim() : '';
+    if (!code) return;
+
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      const iteration = p.codeHistory.length;
+      const newVersion: CodeVersion = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        code,
+        timestamp: Date.now(),
+        source,
+        iteration,
+      };
+      return { 
+        ...p, 
+        codeHistory: [...p.codeHistory, newVersion],
+        updatedAt: Date.now() 
+      };
+    }));
+  }, []);
+
+  // Helper to save rendered image to the latest code version
+  const saveRenderedImageToHistory = useCallback((
+    projectId: string,
+    pngBase64: string,
+    svgBase64?: string
+  ) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      if (p.codeHistory.length === 0) return p;
+      
+      const updatedHistory = [...p.codeHistory];
+      const lastIndex = updatedHistory.length - 1;
+      updatedHistory[lastIndex] = {
+        ...updatedHistory[lastIndex],
+        renderedImage: pngBase64,
+        renderedSvg: svgBase64,
+      };
+      
+      return {
+        ...p,
+        codeHistory: updatedHistory,
+        updatedAt: Date.now()
+      };
+    }));
+  }, []);
+
+  // Helper to add workflow log entry
+  const addWorkflowLog = useCallback((
+    projectId: string,
+    type: WorkflowLogEntry['type'],
+    message: string,
+    agent?: string,
+    details?: string
+  ) => {
+    const entry: WorkflowLogEntry = {
+      timestamp: Date.now(),
+      type,
+      message,
+      agent,
+      details,
+    };
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        workflowLogs: [...(p.workflowLogs || []), entry],
+        updatedAt: Date.now()
+      };
+    }));
+  }, []);
+
+  // Helper to clear workflow logs
+  const clearWorkflowLogs = useCallback((projectId: string) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        workflowLogs: [],
+        updatedAt: Date.now()
+      };
+    }));
+  }, []);
   
   // Execution Config
   const [runMode, setRunMode] = useState<RunMode>('simple');
@@ -312,6 +409,8 @@ export default function App() {
   };
 
   const handleImageSelected = (image: PlotImage | null) => {
+    if (!activeProjectId) return;
+    
     updateActiveProject({ 
       selectedImage: image,
       ...(image ? {} : {
@@ -319,12 +418,18 @@ export default function App() {
         result: null,
         errorMessage: '',
         plotHistory: [],
+        workflowLogs: [],
         renderCount: 0,
         generatedPlotBase64: null,
         renderLogs: '',
         renderError: '',
       })
     });
+    
+    if (image) {
+      addWorkflowLog(activeProjectId, 'info', '图片已上传', undefined, `类型: ${image.mimeType}`);
+    }
+    
     if (!image) {
       setIsFirstPass(false);
       updateLoopBudget(0);
@@ -342,10 +447,17 @@ export default function App() {
     const projectId = activeProjectId;
     const projectImage = selectedImage;
 
+    // Clear logs and start fresh
+    clearWorkflowLogs(projectId);
+    addWorkflowLog(projectId, 'info', '开始分析流程', undefined, `运行模式: ${runMode}, 审查预设: ${reviewPreset}`);
+    addWorkflowLog(projectId, 'info', `使用模型: ${currentConfig?.modelId || '默认'}`);
+
     updateProject(projectId, {
       status: AnalysisStatus.ANALYZING,
       errorMessage: '',
       result: null,
+      codeHistory: [],  // Clear code history on new analysis
+      generatedSvgBase64: null,  // Clear SVG
     });
     crashRecoveryUsedRef.current = false;
     
@@ -361,18 +473,43 @@ export default function App() {
     setIsCapturing(false);
 
     try {
+      addWorkflowLog(projectId, 'agent', 'Student Agent 开始生成代码...', 'Student');
       const analysisData = await analyzePlotImage(
         projectImage.base64, 
         projectImage.mimeType,
         currentConfig?.modelId || '',
         currentConfig?.apiKey || undefined,
-        (newStatus) => updateProject(projectId, { status: newStatus }),
+        (update: AnalysisUpdate) => {
+          if (update.status) {
+            updateProject(projectId, { status: update.status });
+            // Log status changes
+            const statusLabels: Record<string, string> = {
+              [AnalysisStatus.ANALYZING]: 'Student Agent 分析中...',
+            };
+            if (statusLabels[update.status]) {
+              addWorkflowLog(projectId, 'agent', statusLabels[update.status], 'Student');
+            }
+          }
+          if (update.partialResult) {
+            setProjects(prev => prev.map(p => {
+              if (p.id !== projectId) return p;
+              const mergedResult: AnalysisResult = {
+                ...(p.result || { markdown: '', timestamp: Date.now() }),
+                ...update.partialResult,
+              };
+              return { ...p, result: mergedResult, updatedAt: Date.now() };
+            }));
+          }
+        },
         currentConfig?.baseUrl || undefined
       );
       updateProject(projectId, {
         result: analysisData,
         status: AnalysisStatus.SUCCESS,
       });
+      // Save initial code to history
+      extractAndSaveCode(projectId, analysisData.markdown, 'student');
+      addWorkflowLog(projectId, 'success', 'Student Agent 代码生成完成', 'Student');
       addToast("Code generated successfully", "success");
     } catch (e: any) {
       console.error("App Level Error:", e);
@@ -380,6 +517,7 @@ export default function App() {
         status: AnalysisStatus.ERROR,
         errorMessage: e.message || "Unknown error occurred.",
       });
+      addWorkflowLog(projectId, 'error', `分析失败: ${e.message || '未知错误'}`, undefined);
       addToast(e.message || "Analysis failed", "error");
       setIsFirstPass(false);
     }
@@ -397,6 +535,9 @@ export default function App() {
     const currentCode = codeMatch ? codeMatch[1].trim() : (projectResult.markdown.includes('import matplotlib') ? projectResult.markdown : '');
     const triggeredByAuto = pendingAutoRef.current;
 
+    addWorkflowLog(projectId, 'info', `开始审查流程 (${reviewPreset === 'lite' ? 'Lite' : 'Full'} 模式)`, undefined, 
+      feedbackType === 'image' ? '渲染成功，进入审查' : '渲染出错，错误诊断模式');
+
     updateProject(projectId, {
       status: reviewPreset === 'lite' ? AnalysisStatus.CHAIR_QA : AnalysisStatus.TEACHER_STYLE_REVIEW,
       errorMessage: '',
@@ -410,18 +551,64 @@ export default function App() {
         { type: feedbackType, data, mimeType },
         currentConfig?.modelId || '',
         currentConfig?.apiKey || undefined,
-        (newStatus) => updateProject(projectId, { status: newStatus }),
+        (update: AnalysisUpdate) => {
+          if (update.status) {
+            updateProject(projectId, { status: update.status });
+            // Log agent activities
+            const statusLabels: Record<string, { msg: string; agent: string }> = {
+              [AnalysisStatus.TEACHER_STYLE_REVIEW]: { msg: 'Style Teacher 审查中...', agent: 'Style Teacher' },
+              [AnalysisStatus.TEACHER_LAYOUT_REVIEW]: { msg: 'Layout Teacher 审查中...', agent: 'Layout Teacher' },
+              [AnalysisStatus.TEACHER_DATA_REVIEW]: { msg: 'Data Teacher 审查中...', agent: 'Data Teacher' },
+              [AnalysisStatus.CHAIR_QA]: { msg: 'QA Chair 综合评估中...', agent: 'QA Chair' },
+              [AnalysisStatus.CHAIR_STRATEGY]: { msg: 'Strategy Chair 制定修订策略...', agent: 'Strategy Chair' },
+              [AnalysisStatus.REFINING]: { msg: 'Student Agent 修订代码中...', agent: 'Student' },
+            };
+            const label = statusLabels[update.status];
+            if (label) {
+              addWorkflowLog(projectId, 'agent', label.msg, label.agent);
+            }
+          }
+          if (update.partialResult) {
+            setProjects(prev => prev.map(p => {
+              if (p.id !== projectId) return p;
+              // Merge partial result with existing result, preserving markdown
+              const existingResult = p.result || { markdown: currentCode ? `\`\`\`python\n${currentCode}\n\`\`\`` : '', timestamp: Date.now() };
+              const mergedResult: AnalysisResult = {
+                ...existingResult,
+                ...update.partialResult,
+                // Merge arrays instead of replacing
+                teacherReviews: update.partialResult.teacherReviews || existingResult.teacherReviews,
+                chairFindings: update.partialResult.chairFindings || existingResult.chairFindings,
+              };
+              return { ...p, result: mergedResult, updatedAt: Date.now() };
+            }));
+            // Log when partial results arrive
+            if (update.partialResult.teacherReviews?.length) {
+              const lastReview = update.partialResult.teacherReviews[update.partialResult.teacherReviews.length - 1];
+              addWorkflowLog(projectId, 'success', `${lastReview.role} Teacher 审查完成`, `${lastReview.role} Teacher`);
+            }
+            if (update.partialResult.chairFindings?.length) {
+              const lastFinding = update.partialResult.chairFindings[update.partialResult.chairFindings.length - 1];
+              addWorkflowLog(projectId, 'success', `${lastFinding.role} Chair 评估完成`, `${lastFinding.role} Chair`);
+            }
+          }
+        },
         { preset: reviewPreset },
         currentConfig?.baseUrl || undefined
       );
       // Refresh downstream render with new code
       updateProject(projectId, {
         generatedPlotBase64: null,
+        generatedSvgBase64: null,
         renderLogs: '',
         renderError: '',
         result: refinedData,
         status: AnalysisStatus.SUCCESS,
       });
+      // Save revised code to history
+      extractAndSaveCode(projectId, refinedData.markdown, 'revision');
+      addWorkflowLog(projectId, 'success', 'Student Agent 修订完成', 'Student', 
+        `QA状态: ${refinedData.qaStatus || '未知'}, 风险分数: ${refinedData.riskScore?.toFixed(2) || 'N/A'}`);
 
       const riskValue = refinedData.riskScore;
       const effectiveRisk = typeof riskValue === 'number' && Number.isFinite(riskValue)
@@ -432,8 +619,12 @@ export default function App() {
         && loopBudgetRef.current > 0
         && effectiveRisk > RISK_LOOP_THRESHOLD;
       if (shouldAutoLoop) {
+        addWorkflowLog(projectId, 'info', `风险分数 ${effectiveRisk.toFixed(2)} > ${RISK_LOOP_THRESHOLD}，继续下一轮迭代...`);
         setIsFirstPass(true);
       } else {
+        if (effectiveRisk <= RISK_LOOP_THRESHOLD) {
+          addWorkflowLog(projectId, 'success', `风险分数 ${effectiveRisk.toFixed(2)} ≤ ${RISK_LOOP_THRESHOLD}，审查通过！`);
+        }
         setIsFirstPass(false);
         updateLoopBudget(0);
       }
@@ -443,6 +634,7 @@ export default function App() {
         status: AnalysisStatus.ERROR,
         errorMessage: e.message || "Refinement failed.",
       });
+      addWorkflowLog(projectId, 'error', `审查失败: ${e.message || '未知错误'}`);
       addToast("Refinement failed", "error");
     } finally {
       pendingAutoRef.current = false;
@@ -459,6 +651,9 @@ export default function App() {
     setIsFirstPass(false); 
     setIsCapturing(true); 
     addToast(`Auto-refining... (${loopBudgetRef.current} loops left)`, "info");
+    if (activeProjectId) {
+      addWorkflowLog(activeProjectId, 'info', `渲染完成，自动进入审查 (剩余 ${loopBudgetRef.current} 轮)`);
+    }
     
     setTimeout(async () => {
         pendingAutoRef.current = true;
@@ -480,6 +675,9 @@ export default function App() {
     setIsCapturing(true);
     pendingAutoRef.current = true;
     updateLoopBudget(prev => Math.max(prev - 1, 0));
+    if (activeProjectId) {
+      addWorkflowLog(activeProjectId, 'warning', `渲染出错，进入错误诊断模式`, undefined, errorText.slice(0, 200));
+    }
     try {
       await handleRefine('error', errorText);
     } finally {
@@ -671,12 +869,18 @@ export default function App() {
                   <OutputPanel 
                     status={status}
                     generatedPlotBase64={generatedPlotBase64}
+                    generatedSvgBase64={generatedSvgBase64}
                     setGeneratedPlotBase64={setGeneratedPlotBase64}
+                    setGeneratedSvgBase64={setGeneratedSvgBase64}
                     renderLogs={renderLogs}
                     setRenderLogs={setRenderLogs}
                     renderError={renderError}
                     setRenderError={setRenderError}
-                    onPlotRendered={(base64) => {
+                    onPlotRendered={(base64, svgBase64) => {
+                      // Save rendered image to the latest code version
+                      if (activeProjectId) {
+                        saveRenderedImageToHistory(activeProjectId, base64, svgBase64);
+                      }
                       if (runMode !== 'simple') handleAutoRefinementTrigger(base64);
                     }}
                     onPlotRuntimeError={(errorText) => {
@@ -689,6 +893,8 @@ export default function App() {
                     pythonCode={currentPythonCode}
                     selectedImage={selectedImage}
                     onShowToast={addToast}
+                    projectName={activeProject?.name || 'plot'}
+                    codeIteration={(activeProject?.codeHistory?.length || 0)}
                   />
                 </div>
              </div>
@@ -718,7 +924,10 @@ export default function App() {
                   result={result}
                   renderLogs={renderLogs}
                   renderError={renderError}
+                  workflowLogs={workflowLogs}
                   onShowToast={addToast}
+                  codeHistory={projects.find(p => p.id === activeProjectId)?.codeHistory || []}
+                  projectName={activeProject?.name || 'plot'}
                 />
              </div>
 
