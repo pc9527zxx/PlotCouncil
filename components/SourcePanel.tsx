@@ -18,6 +18,7 @@ interface SourcePanelProps {
   setReviewPreset: (preset: ReviewPreset) => void;
   maxAutoLoops: number;
   setMaxAutoLoops: (loops: number) => void;
+  onShowToast?: (message: string, type: 'info' | 'success' | 'error') => void;
 }
 
 export const SourcePanel: React.FC<SourcePanelProps> = ({
@@ -31,7 +32,8 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   reviewPreset,
   setReviewPreset,
   maxAutoLoops,
-  setMaxAutoLoops
+  setMaxAutoLoops,
+  onShowToast
 }) => {
   return (
     <div className="h-full flex flex-col bg-white dark:bg-zinc-900 border-r border-slate-200 dark:border-zinc-800">
@@ -119,7 +121,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
       <div className="flex-1 min-h-0 p-3 overflow-y-auto custom-scrollbar relative bg-slate-50/30 dark:bg-zinc-950/30">
          <div className="min-h-full flex flex-col">
             <div className="flex-1 min-h-0 relative">
-               <ImageUploader selectedImage={selectedImage} onImageSelected={onImageSelected} />
+               <ImageUploader selectedImage={selectedImage} onImageSelected={onImageSelected} onShowToast={onShowToast} />
             </div>
             
             {/* Manual Mode Slider (Conditional) */}

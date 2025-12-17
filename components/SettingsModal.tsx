@@ -1,13 +1,15 @@
-import React from 'react';
-import { X, Key, Cpu, Moon, Sun, Monitor } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Key, Cpu, Moon, Sun, Monitor, Globe, Plus, Trash2, Check, Pencil, Zap, Loader2 } from 'lucide-react';
+import { GoogleGenAI } from '@google/genai';
+import { ModelConfig } from '../services/projectStore';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  apiKey: string;
-  setApiKey: (key: string) => void;
-  model: string;
-  setModel: (model: string) => void;
+  selectedConfigId: string;
+  setSelectedConfigId: (id: string) => void;
+  modelConfigs: ModelConfig[];
+  setModelConfigs: (configs: ModelConfig[]) => void;
   darkMode: boolean;
   toggleTheme: () => void;
 }
@@ -15,13 +17,226 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
-  apiKey,
-  setApiKey,
-  model,
-  setModel,
+  selectedConfigId,
+  setSelectedConfigId,
+  modelConfigs,
+  setModelConfigs,
   darkMode,
   toggleTheme
 }) => {
+  const [editModelId, setEditModelId] = useState('');
+  const [editBaseUrl, setEditBaseUrl] = useState('');
+  const [editApiKey, setEditApiKey] = useState('');
+  const [editingConfigId, setEditingConfigId] = useState<string | null>(null); // null = adding new, string = editing existing
+  const [showForm, setShowForm] = useState(false);
+  const [testingConfigId, setTestingConfigId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ configId: string; success: boolean; message: string } | null>(null);
+
+  const resetForm = () => {
+    setEditModelId('');
+    setEditBaseUrl('');
+    setEditApiKey('');
+    setEditingConfigId(null);
+    setShowForm(false);
+  };
+
+  const startAddNew = () => {
+    setEditModelId('');
+    setEditBaseUrl('');
+    setEditApiKey('');
+    setEditingConfigId(null);
+    setShowForm(true);
+  };
+
+  const startEdit = (config: ModelConfig) => {
+    setEditModelId(config.modelId);
+    setEditBaseUrl(config.baseUrl);
+    setEditApiKey(config.apiKey);
+    setEditingConfigId(config.id);
+    setShowForm(true);
+  };
+
+  const handleSave = () => {
+    if (!editModelId.trim()) return;
+
+    if (editingConfigId) {
+      // Editing existing config
+      const updated = modelConfigs.map(c => 
+        c.id === editingConfigId 
+          ? { ...c, modelId: editModelId.trim(), baseUrl: editBaseUrl.trim(), apiKey: editApiKey.trim() }
+          : c
+      );
+      setModelConfigs(updated);
+    } else {
+      // Adding new config
+      const configId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const newConfig: ModelConfig = {
+        id: configId,
+        modelId: editModelId.trim(),
+        baseUrl: editBaseUrl.trim(),
+        apiKey: editApiKey.trim(),
+      };
+      setModelConfigs([...modelConfigs, newConfig]);
+      setSelectedConfigId(configId);
+    }
+    resetForm();
+  };
+
+  const handleDeleteConfig = (configId: string) => {
+    const updated = modelConfigs.filter(c => c.id !== configId);
+    setModelConfigs(updated);
+    if (selectedConfigId === configId) {
+      setSelectedConfigId(updated.length > 0 ? updated[0].id : '');
+    }
+    if (editingConfigId === configId) {
+      resetForm();
+    }
+  };
+
+  const handleSelectConfig = (configId: string) => {
+    setSelectedConfigId(configId);
+  };
+
+  // Detect if baseUrl is OpenAI-compatible
+  const isOpenAICompatible = (baseUrl?: string): boolean => {
+    if (!baseUrl) return false;
+    const url = baseUrl.toLowerCase();
+    return url.includes('/v1') || 
+           url.includes('openai') || 
+           url.includes('siliconflow') ||
+           url.includes('openrouter') ||
+           url.includes('together') ||
+           url.includes('groq') ||
+           url.includes('deepseek');
+  };
+
+  // Get proxy URL for backend
+  const getProxyUrl = (): string => {
+    const envUrl = (import.meta as any).env?.VITE_RENDER_API_URL;
+    if (envUrl) return envUrl.replace(/\/+$/, '');
+    if (typeof window !== 'undefined') return window.location.origin;
+    return 'http://localhost:8000';
+  };
+
+  const testConnection = async (config: ModelConfig) => {
+    if (!config.apiKey) {
+      setTestResult({ configId: config.id, success: false, message: 'No API Key set' });
+      return;
+    }
+    setTestingConfigId(config.id);
+    setTestResult(null);
+    
+    try {
+      if (isOpenAICompatible(config.baseUrl)) {
+        // Try direct call first, then fallback to proxy
+        let text = '';
+        let usedProxy = false;
+        
+        try {
+          // Direct API call
+          let baseUrl = config.baseUrl?.replace(/\/+$/, '') || '';
+          const endpoint = baseUrl.includes('/chat/completions') 
+            ? baseUrl 
+            : `${baseUrl}/chat/completions`;
+          
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s for test
+          
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${config.apiKey}`,
+            },
+            body: JSON.stringify({
+              model: config.modelId,
+              messages: [{ role: 'user', content: 'Say "Hello" in one word only.' }],
+              max_tokens: 10,
+            }),
+            signal: controller.signal,
+          });
+          
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            throw new Error(`API Error ${response.status}: ${errorText.slice(0, 100)}`);
+          }
+
+          const data = await response.json();
+          text = data.choices?.[0]?.message?.content || '';
+        } catch (directErr: any) {
+          // If CORS error, try proxy
+          if (directErr.message === 'Failed to fetch' || directErr.name === 'AbortError') {
+            usedProxy = true;
+            const proxyUrl = getProxyUrl();
+            const proxyResponse = await fetch(`${proxyUrl}/api/llm/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                base_url: config.baseUrl,
+                api_key: config.apiKey,
+                model: config.modelId,
+                messages: [{ role: 'user', content: 'Say "Hello" in one word only.' }],
+                max_tokens: 10,
+                temperature: 0.1,
+              }),
+            });
+            
+            if (!proxyResponse.ok) {
+              const errData = await proxyResponse.json().catch(() => ({ detail: 'Proxy error' }));
+              throw new Error(errData.detail || 'Proxy failed');
+            }
+            
+            const proxyData = await proxyResponse.json();
+            text = proxyData.content || '';
+          } else {
+            throw directErr;
+          }
+        }
+
+        if (text) {
+          setTestResult({ 
+            configId: config.id, 
+            success: true, 
+            message: `✓ ${usedProxy ? '(via proxy) ' : ''}"${text.slice(0, 20)}..."` 
+          });
+        } else {
+          setTestResult({ configId: config.id, success: false, message: 'No response received' });
+        }
+      } else {
+        // Google GenAI SDK test
+        const clientOptions: { apiKey: string; baseURL?: string } = { apiKey: config.apiKey };
+        if (config.baseUrl?.trim()) {
+          clientOptions.baseURL = config.baseUrl.trim();
+        }
+        const client = new GoogleGenAI(clientOptions);
+        const response = await client.models.generateContent({
+          model: config.modelId,
+          contents: 'Say "Hello" in one word only.',
+        });
+        const text = response?.text || '';
+        if (text) {
+          setTestResult({ configId: config.id, success: true, message: `✓ "${text.slice(0, 20)}..."` });
+        } else {
+          setTestResult({ configId: config.id, success: false, message: 'No response received' });
+        }
+      }
+    } catch (err: any) {
+      let message = 'Connection failed';
+      if (err?.message?.includes('403')) message = 'Access Denied: Invalid API Key';
+      else if (err?.message?.includes('404')) message = 'Model Not Found';
+      else if (err?.message?.includes('429')) message = 'Rate Limit Exceeded';
+      else if (err?.message?.includes('proxy') || err?.message?.includes('Proxy')) {
+        message = 'Direct call failed (CORS). Start backend: uvicorn server.main:app --reload';
+      }
+      else if (err?.message) message = err.message.slice(0, 80);
+      setTestResult({ configId: config.id, success: false, message });
+    } finally {
+      setTestingConfigId(null);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -31,7 +246,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-900/50">
           <h2 className="text-sm font-bold text-slate-800 dark:text-white uppercase tracking-wider flex items-center gap-2">
             <Monitor className="w-4 h-4 text-indigo-500" />
-            System Configuration
+            Model Configurations
           </h2>
           <button 
             onClick={onClose}
@@ -42,60 +257,167 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-6">
+        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
           
-          {/* API Key Section */}
+          {/* Model Configs Section */}
           <div className="space-y-3">
-            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide flex items-center gap-2">
-              <Key className="w-3.5 h-3.5" /> Gemini API Key
-            </label>
-            <div className="relative">
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-..."
-                className="w-full pl-3 pr-10 py-2.5 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg text-sm text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all font-mono"
-              />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <div className={`w-2 h-2 rounded-full ${apiKey ? 'bg-emerald-500' : 'bg-rose-400'}`} />
-              </div>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide flex items-center gap-2">
+                <Cpu className="w-3.5 h-3.5" /> Saved Configurations
+              </label>
+              <button
+                onClick={startAddNew}
+                className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" /> Add New
+              </button>
             </div>
-            <p className="text-[10px] text-slate-400 leading-relaxed">
-              Your key is stored locally in your browser. Leave empty to run in 
-              <span className="font-bold text-amber-600 dark:text-amber-500 ml-1">Simulation Mode</span>.
-            </p>
-          </div>
 
-          {/* Model Selection */}
-          <div className="space-y-3">
-            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide flex items-center gap-2">
-              <Cpu className="w-3.5 h-3.5" /> Model Engine
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { id: 'gemini-3-pro-preview', label: 'Gemini 3.0 Pro' },
-                { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }
-              ].map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setModel(m.id)}
-                  className={`
-                    flex flex-col items-start p-3 rounded-lg border text-left transition-all
-                    ${model === m.id
-                      ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 ring-1 ring-indigo-500/20'
-                      : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 hover:border-indigo-300 dark:hover:border-zinc-700'}
-                  `}
-                >
-                  <span className={`text-xs font-bold ${model === m.id ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300'}`}>
-                    {m.label}
-                  </span>
-                  <span className="text-[10px] text-slate-400 mt-1">
-                    {m.id.includes('pro') ? 'Reasoning optimized' : 'Speed optimized'}
-                  </span>
-                </button>
-              ))}
-            </div>
+            {/* Add/Edit Config Form */}
+            {showForm && (
+              <div className="p-3 bg-slate-100 dark:bg-zinc-800 rounded-lg space-y-2 border border-slate-200 dark:border-zinc-700">
+                <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">
+                  {editingConfigId ? 'Edit Configuration' : 'New Configuration'}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-3 h-3 text-slate-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={editModelId}
+                    onChange={(e) => setEditModelId(e.target.value)}
+                    placeholder="Model ID (e.g., gemini-2.5-flash, gpt-4o)"
+                    className="flex-1 px-2 py-1.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded text-xs text-slate-800 dark:text-slate-200 font-mono"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Globe className="w-3 h-3 text-slate-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={editBaseUrl}
+                    onChange={(e) => setEditBaseUrl(e.target.value)}
+                    placeholder="Base URL (leave empty for default)"
+                    className="flex-1 px-2 py-1.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded text-xs text-slate-800 dark:text-slate-200 font-mono"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Key className="w-3 h-3 text-slate-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={editApiKey}
+                    onChange={(e) => setEditApiKey(e.target.value)}
+                    placeholder="API Key"
+                    autoComplete="off"
+                    data-1p-ignore
+                    data-lpignore="true"
+                    className="flex-1 px-2 py-1.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded text-xs text-slate-800 dark:text-slate-200 font-mono"
+                    style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
+                  />
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={handleSave}
+                    disabled={!editModelId.trim()}
+                    className="flex-1 px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {editingConfigId ? 'Save Changes' : 'Add Configuration'}
+                  </button>
+                  <button
+                    onClick={resetForm}
+                    className="px-3 py-1.5 text-slate-500 text-xs font-medium hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Config List */}
+            {modelConfigs.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 dark:text-slate-500">
+                <Cpu className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                <p className="text-xs">No configurations saved</p>
+                <p className="text-[10px] mt-1">Click "Add New" to create one</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2">
+                {modelConfigs.map((config) => (
+                  <button
+                    key={config.id}
+                    onClick={() => handleSelectConfig(config.id)}
+                    className={`
+                      flex items-center justify-between p-3 rounded-lg border text-left transition-all group
+                      ${selectedConfigId === config.id
+                        ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 ring-1 ring-indigo-500/20'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 hover:border-indigo-300 dark:hover:border-zinc-700'}
+                    `}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        {selectedConfigId === config.id && (
+                          <Check className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        )}
+                        <span className={`text-xs font-bold truncate ${selectedConfigId === config.id ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300'}`}>
+                          {config.modelId}
+                        </span>
+                      </div>
+                      {config.baseUrl && (
+                        <span className="text-[9px] text-slate-400 mt-0.5 block truncate pl-5">
+                          {config.baseUrl}
+                        </span>
+                      )}
+                      <div className="flex items-center gap-1 mt-0.5 pl-5">
+                        <div className={`w-1.5 h-1.5 rounded-full ${config.apiKey ? 'bg-emerald-500' : 'bg-rose-400'}`} />
+                        <span className="text-[9px] text-slate-400">
+                          {config.apiKey ? 'API Key set' : 'No API Key'}
+                        </span>
+                      </div>
+                      {testResult?.configId === config.id && (
+                        <div className={`text-[9px] mt-0.5 pl-5 ${testResult.success ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          {testResult.message}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          testConnection(config);
+                        }}
+                        disabled={testingConfigId === config.id}
+                        className="p-1 text-slate-400 hover:text-emerald-500 disabled:opacity-50"
+                        title="Test connection"
+                      >
+                        {testingConfigId === config.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEdit(config);
+                        }}
+                        className="p-1 text-slate-400 hover:text-indigo-500"
+                        title="Edit configuration"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteConfig(config.id);
+                        }}
+                        className="p-1 text-slate-400 hover:text-rose-500"
+                        title="Delete configuration"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Appearance */}
@@ -127,7 +449,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             onClick={onClose}
             className="px-6 py-2 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold rounded-lg hover:opacity-90 transition-opacity"
           >
-            Save Changes
+            Done
           </button>
         </div>
       </div>

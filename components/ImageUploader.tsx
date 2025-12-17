@@ -5,9 +5,10 @@ import { PlotImage } from '../types';
 interface ImageUploaderProps {
   onImageSelected: (image: PlotImage | null) => void;
   selectedImage: PlotImage | null;
+  onShowToast?: (message: string, type: 'info' | 'success' | 'error') => void;
 }
 
-export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageSelected, selectedImage }) => {
+export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageSelected, selectedImage, onShowToast }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
@@ -16,7 +17,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageSelected, s
   const processFile = (file: File | undefined) => {
     if (!file) return;
     if (!file.type.startsWith('image/')) {
-      alert('Please upload an image file (PNG, JPG, WEBP).');
+      if (onShowToast) {
+        onShowToast('Please upload an image file (PNG, JPG, WEBP).', 'error');
+      }
       return;
     }
     const reader = new FileReader();

@@ -5,6 +5,7 @@ import { ProjectSidebar } from './components/ProjectSidebar';
 import { SourcePanel } from './components/SourcePanel';
 import { SettingsModal } from './components/SettingsModal';
 import { DocsPanel } from './components/DocsPanel';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toast, ToastItem, ToastType } from './components/Toast';
 import { analyzePlotImage, refinePlotAnalysis } from './services/geminiService';
 import { PlotImage, AnalysisResult, AnalysisStatus, Project, PlotSnapshot } from './types';
@@ -14,24 +15,31 @@ import {
   migrateLegacyIndexedDBToPlotCouncil,
   saveProjectsSnapshot, 
   createEmptyProject, 
-  normalizePlotHistory 
+  normalizePlotHistory,
+  loadModelConfigs,
+  saveModelConfigs,
+  migrateModelConfigsFromLocalStorage,
+  ModelConfig
 } from './services/projectStore';
 import { Layout, ChevronLeft, ChevronRight } from 'lucide-react';
 
-const MODELS = [
-  { id: 'gemini-3-pro-preview', name: 'Gemini 3.0 Pro', desc: 'Best for Precision' },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', desc: 'Fast Speed' },
-];
+// ModelConfig is now imported from projectStore
+
 const RISK_LOOP_THRESHOLD = 0.6;
-const STORAGE_KEYS = {
-  apiKey: 'plotcouncil-api-key',
-  model: 'plotcouncil-model',
-  maxLoops: 'plotcouncil-max-loops',
-};
+// Legacy localStorage keys to clean up during migration
 const LEGACY_STORAGE_KEYS = {
   apiKey: 'sciplot-api-key',
   model: 'sciplot-model',
   maxLoops: 'sciplot-max-loops',
+  // Old keys to clean up
+  oldApiKey: 'plotcouncil-api-key',
+  oldModel: 'plotcouncil-model',
+  oldBaseUrl: 'plotcouncil-base-url',
+  oldCustomModels: 'plotcouncil-custom-models',
+  // Keys that are now in IndexedDB
+  modelConfigs: 'plotcouncil-model-configs',
+  selectedConfigId: 'plotcouncil-selected-config-id',
+  maxLoopsNew: 'plotcouncil-max-loops',
 };
 
 type RunMode = 'simple' | 'complex' | 'manual';
@@ -42,8 +50,11 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDocsOpen, setIsDocsOpen] = useState(false);
-  const [apiKey, setApiKey] = useState<string>('');
-  const [model, setModel] = useState<string>(MODELS[0].id);
+  const [modelConfigs, setModelConfigs] = useState<ModelConfig[]>([]);
+  const [selectedConfigId, setSelectedConfigId] = useState<string>('');
+
+  // Derived: get current config
+  const currentConfig = modelConfigs.find(c => c.id === selectedConfigId) || null;
 
   // Layout State
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -57,20 +68,89 @@ export default function App() {
   // Toast State
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
+  // Delete Confirmation Dialog State
+  const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; projectId: string | null }>({
+    isOpen: false,
+    projectId: null,
+  });
+
   // Project State
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
 
-  const [selectedImage, setSelectedImage] = useState<PlotImage | null>(null);
-  const [status, setStatus] = useState<AnalysisStatus>(AnalysisStatus.IDLE);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string>('');
+  // Per-project running tasks tracking (to allow concurrent generation)
+  const runningTasksRef = useRef<Map<string, AbortController>>(new Map());
 
-  const [plotHistory, setPlotHistory] = useState<PlotSnapshot[]>([]);
-  const [renderCount, setRenderCount] = useState(0);
-  const [generatedPlotBase64, setGeneratedPlotBase64] = useState<string | null>(null);
-  const [renderLogs, setRenderLogs] = useState('');
-  const [renderError, setRenderError] = useState('');
+  // Derived state from active project (for UI display)
+  const activeProject = projects.find(p => p.id === activeProjectId);
+  const selectedImage = activeProject?.selectedImage ?? null;
+  const status = activeProject?.status ?? AnalysisStatus.IDLE;
+  const result = activeProject?.result ?? null;
+  const errorMessage = activeProject?.errorMessage ?? '';
+  const plotHistory = activeProject?.plotHistory ?? [];
+  const renderCount = activeProject?.renderCount ?? 0;
+  const generatedPlotBase64 = activeProject?.generatedPlotBase64 ?? null;
+  const renderLogs = activeProject?.renderLogs ?? '';
+  const renderError = activeProject?.renderError ?? '';
+
+  // Update helpers for active project
+  const updateActiveProject = useCallback((updates: Partial<Project>) => {
+    setProjects(prev => prev.map(p => 
+      p.id === activeProjectId ? { ...p, ...updates, updatedAt: Date.now() } : p
+    ));
+  }, [activeProjectId]);
+
+  // Update a specific project (for background tasks)
+  const updateProject = useCallback((projectId: string, updates: Partial<Project>) => {
+    setProjects(prev => prev.map(p => 
+      p.id === projectId ? { ...p, ...updates, updatedAt: Date.now() } : p
+    ));
+  }, []);
+
+  // Setters that update active project
+  const setSelectedImage = useCallback((image: PlotImage | null) => {
+    updateActiveProject({ selectedImage: image });
+  }, [updateActiveProject]);
+
+  const setStatus = useCallback((newStatus: AnalysisStatus) => {
+    updateActiveProject({ status: newStatus });
+  }, [updateActiveProject]);
+
+  const setResult = useCallback((newResult: AnalysisResult | null) => {
+    updateActiveProject({ result: newResult });
+  }, [updateActiveProject]);
+
+  const setErrorMessage = useCallback((msg: string) => {
+    updateActiveProject({ errorMessage: msg });
+  }, [updateActiveProject]);
+
+  const setPlotHistory = useCallback((history: PlotSnapshot[] | ((prev: PlotSnapshot[]) => PlotSnapshot[])) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== activeProjectId) return p;
+      const newHistory = typeof history === 'function' ? history(p.plotHistory) : history;
+      return { ...p, plotHistory: newHistory, updatedAt: Date.now() };
+    }));
+  }, [activeProjectId]);
+
+  const setRenderCount = useCallback((count: number | ((prev: number) => number)) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== activeProjectId) return p;
+      const newCount = typeof count === 'function' ? count(p.renderCount) : count;
+      return { ...p, renderCount: newCount, updatedAt: Date.now() };
+    }));
+  }, [activeProjectId]);
+
+  const setGeneratedPlotBase64 = useCallback((base64: string | null) => {
+    updateActiveProject({ generatedPlotBase64: base64 });
+  }, [updateActiveProject]);
+
+  const setRenderLogs = useCallback((logs: string) => {
+    updateActiveProject({ renderLogs: logs });
+  }, [updateActiveProject]);
+
+  const setRenderError = useCallback((err: string) => {
+    updateActiveProject({ renderError: err });
+  }, [updateActiveProject]);
   
   // Execution Config
   const [runMode, setRunMode] = useState<RunMode>('simple');
@@ -114,43 +194,38 @@ export default function App() {
 
   const clampLoops = (value: number) => Math.max(0, Math.min(8, value));
 
-  // Initialize
+  // Initialize theme
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    // Theme init
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       setDarkMode(true);
     }
-
-    // Load persisted settings
-    const storedApiKey = window.localStorage.getItem(STORAGE_KEYS.apiKey) 
-      ?? window.localStorage.getItem(LEGACY_STORAGE_KEYS.apiKey);
-    if (storedApiKey) setApiKey(storedApiKey);
-    
-    const storedModel = window.localStorage.getItem(STORAGE_KEYS.model) 
-      ?? window.localStorage.getItem(LEGACY_STORAGE_KEYS.model);
-    if (storedModel) setModel(storedModel);
-
-    const storedLoops = window.localStorage.getItem(STORAGE_KEYS.maxLoops) 
-      ?? window.localStorage.getItem(LEGACY_STORAGE_KEYS.maxLoops);
-    if (storedLoops !== null) {
-      const parsed = parseInt(storedLoops, 10);
-      if (!Number.isNaN(parsed)) setMaxAutoLoops(clampLoops(parsed));
-    }
   }, []);
 
-  // Save Settings Persistently
+  // Load model configs from IndexedDB
+  const [modelConfigsLoaded, setModelConfigsLoaded] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (apiKey) {
-      window.localStorage.setItem(STORAGE_KEYS.apiKey, apiKey);
-    } else {
-      window.localStorage.removeItem(STORAGE_KEYS.apiKey);
-    }
-    window.localStorage.setItem(STORAGE_KEYS.model, model);
-    window.localStorage.setItem(STORAGE_KEYS.maxLoops, String(maxAutoLoops));
-    Object.values(LEGACY_STORAGE_KEYS).forEach(key => window.localStorage.removeItem(key));
-  }, [apiKey, model, maxAutoLoops]);
+    (async () => {
+      // First, migrate from localStorage if needed
+      await migrateModelConfigsFromLocalStorage();
+      // Then load from IndexedDB
+      const { configs, selectedConfigId: storedSelectedId, maxLoops } = await loadModelConfigs();
+      setModelConfigs(configs);
+      if (storedSelectedId) setSelectedConfigId(storedSelectedId);
+      setMaxAutoLoops(clampLoops(maxLoops));
+      setModelConfigsLoaded(true);
+      // Clean up legacy keys
+      Object.values(LEGACY_STORAGE_KEYS).forEach(key => window.localStorage.removeItem(key));
+    })();
+  }, []);
+
+  // Save model configs to IndexedDB
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!modelConfigsLoaded) return; // Don't save until initial load is complete
+    saveModelConfigs(modelConfigs, selectedConfigId || null, maxAutoLoops).catch(() => {});
+  }, [modelConfigs, selectedConfigId, maxAutoLoops, modelConfigsLoaded]);
 
   // Load projects
   useEffect(() => {
@@ -175,24 +250,15 @@ export default function App() {
           : initialProjects[0].id;
         if (cancelled) return;
 
-        setProjects(initialProjects);
-        setActiveProjectId(initialActive);
+        // Normalize projects on load
+        const normalizedProjects = initialProjects.map(p => ({
+          ...p,
+          plotHistory: normalizePlotHistory(p.plotHistory),
+          status: p.result ? AnalysisStatus.SUCCESS : AnalysisStatus.IDLE,
+        }));
 
-        const active = initialProjects.find(p => p.id === initialActive) || initialProjects[0];
-        setSelectedImage(active.selectedImage);
-        setResult(active.result);
-        setErrorMessage(active.errorMessage);
-        const normalizedHistory = normalizePlotHistory(active.plotHistory);
-        setPlotHistory(normalizedHistory);
-        const maxSeq = normalizedHistory.reduce((acc, s) => Math.max(acc, s.seq || 0), 0);
-        const normalizedRenderCount = typeof active.renderCount === 'number' && Number.isFinite(active.renderCount)
-          ? Math.max(active.renderCount, maxSeq)
-          : maxSeq;
-        setRenderCount(normalizedRenderCount);
-        setGeneratedPlotBase64(active.generatedPlotBase64 ?? null);
-        setRenderLogs(typeof (active as any).renderLogs === 'string' ? (active as any).renderLogs : '');
-        setRenderError(typeof (active as any).renderError === 'string' ? (active as any).renderError : '');
-        setStatus(active.result ? AnalysisStatus.SUCCESS : AnalysisStatus.IDLE);
+        setProjects(normalizedProjects);
+        setActiveProjectId(initialActive);
       } catch {
         if (cancelled) return;
         setProjects([]);
@@ -213,43 +279,14 @@ export default function App() {
     return () => window.clearTimeout(handle);
   }, [projects, activeProjectId]);
 
-  useEffect(() => {
-    if (!activeProjectId) return;
-    setProjects(prev => prev.map(p => {
-      if (p.id !== activeProjectId) return p;
-      return {
-        ...p,
-        selectedImage,
-        result,
-        errorMessage,
-        plotHistory,
-        renderCount,
-        generatedPlotBase64,
-        renderLogs,
-        renderError,
-        updatedAt: Date.now(),
-      };
-    }));
-  }, [activeProjectId, selectedImage, result, errorMessage, plotHistory, renderCount, generatedPlotBase64, renderLogs, renderError]);
-
+  // switchProject now just changes the activeProjectId - no state copying needed!
+  // The UI will automatically reflect the new project's state through derived values
   const switchProject = (projectId: string) => {
     const next = projects.find(p => p.id === projectId);
     if (!next) return;
+    // Just switch the active project - don't interrupt any running tasks
     setActiveProjectId(projectId);
-    setSelectedImage(next.selectedImage);
-    setResult(next.result);
-    setErrorMessage(next.errorMessage);
-    const normalizedHistory = normalizePlotHistory(next.plotHistory);
-    setPlotHistory(normalizedHistory);
-    const maxSeq = normalizedHistory.reduce((acc, s) => Math.max(acc, s.seq || 0), 0);
-    const normalizedRenderCount = typeof next.renderCount === 'number' && Number.isFinite(next.renderCount)
-      ? Math.max(next.renderCount, maxSeq)
-      : maxSeq;
-    setRenderCount(normalizedRenderCount);
-    setGeneratedPlotBase64(next.generatedPlotBase64 ?? null);
-    setRenderLogs(typeof (next as any).renderLogs === 'string' ? (next as any).renderLogs : '');
-    setRenderError(typeof (next as any).renderError === 'string' ? (next as any).renderError : '');
-    setStatus(next.result ? AnalysisStatus.SUCCESS : AnalysisStatus.IDLE);
+    // Reset UI-only state
     setIsFirstPass(false);
     updateLoopBudget(0);
     crashRecoveryUsedRef.current = false;
@@ -275,16 +312,20 @@ export default function App() {
   };
 
   const handleImageSelected = (image: PlotImage | null) => {
-    setSelectedImage(image);
+    updateActiveProject({ 
+      selectedImage: image,
+      ...(image ? {} : {
+        status: AnalysisStatus.IDLE,
+        result: null,
+        errorMessage: '',
+        plotHistory: [],
+        renderCount: 0,
+        generatedPlotBase64: null,
+        renderLogs: '',
+        renderError: '',
+      })
+    });
     if (!image) {
-      setStatus(AnalysisStatus.IDLE);
-      setResult(null);
-      setErrorMessage('');
-      setPlotHistory([]);
-      setRenderCount(0);
-      setGeneratedPlotBase64(null);
-      setRenderLogs('');
-      setRenderError('');
       setIsFirstPass(false);
       updateLoopBudget(0);
       crashRecoveryUsedRef.current = false;
@@ -292,14 +333,20 @@ export default function App() {
   };
 
   const handleAnalyze = async () => {
-    if (!selectedImage) {
+    if (!selectedImage || !activeProjectId) {
         addToast("Please upload an image first", "error");
         return;
     }
 
-    setStatus(AnalysisStatus.ANALYZING);
-    setErrorMessage('');
-    setResult(null);
+    // Capture project ID to use throughout the async operation
+    const projectId = activeProjectId;
+    const projectImage = selectedImage;
+
+    updateProject(projectId, {
+      status: AnalysisStatus.ANALYZING,
+      errorMessage: '',
+      result: null,
+    });
     crashRecoveryUsedRef.current = false;
     
     const initialBudget = runMode === 'simple' 
@@ -315,52 +362,67 @@ export default function App() {
 
     try {
       const analysisData = await analyzePlotImage(
-        selectedImage.base64, 
-        selectedImage.mimeType,
-        model,
-        apiKey || undefined,
-        (newStatus) => setStatus(newStatus)
+        projectImage.base64, 
+        projectImage.mimeType,
+        currentConfig?.modelId || '',
+        currentConfig?.apiKey || undefined,
+        (newStatus) => updateProject(projectId, { status: newStatus }),
+        currentConfig?.baseUrl || undefined
       );
-      setResult(analysisData);
-      setStatus(AnalysisStatus.SUCCESS); 
+      updateProject(projectId, {
+        result: analysisData,
+        status: AnalysisStatus.SUCCESS,
+      });
       addToast("Code generated successfully", "success");
     } catch (e: any) {
       console.error("App Level Error:", e);
-      setStatus(AnalysisStatus.ERROR);
-      setErrorMessage(e.message || "Unknown error occurred.");
+      updateProject(projectId, {
+        status: AnalysisStatus.ERROR,
+        errorMessage: e.message || "Unknown error occurred.",
+      });
       addToast(e.message || "Analysis failed", "error");
       setIsFirstPass(false);
     }
   };
 
   const handleRefine = async (feedbackType: 'image' | 'error', data: string, mimeType?: string) => {
-    if (!selectedImage || !result) return;
+    if (!selectedImage || !result || !activeProjectId) return;
     
-    const codeMatch = result.markdown.match(/```python([\s\S]*?)```/);
-    const currentCode = codeMatch ? codeMatch[1].trim() : (result.markdown.includes('import matplotlib') ? result.markdown : '');
+    // Capture project context for async operation
+    const projectId = activeProjectId;
+    const projectImage = selectedImage;
+    const projectResult = result;
+    
+    const codeMatch = projectResult.markdown.match(/```python([\s\S]*?)```/);
+    const currentCode = codeMatch ? codeMatch[1].trim() : (projectResult.markdown.includes('import matplotlib') ? projectResult.markdown : '');
     const triggeredByAuto = pendingAutoRef.current;
 
-    setStatus(reviewPreset === 'lite' ? AnalysisStatus.CHAIR_QA : AnalysisStatus.TEACHER_STYLE_REVIEW);
-    setErrorMessage('');
+    updateProject(projectId, {
+      status: reviewPreset === 'lite' ? AnalysisStatus.CHAIR_QA : AnalysisStatus.TEACHER_STYLE_REVIEW,
+      errorMessage: '',
+    });
 
     try {
       const refinedData = await refinePlotAnalysis(
-        selectedImage.base64,
-        selectedImage.mimeType,
+        projectImage.base64,
+        projectImage.mimeType,
         currentCode,
         { type: feedbackType, data, mimeType },
-        model,
-        apiKey || undefined,
-        (newStatus) => setStatus(newStatus),
-        { preset: reviewPreset }
+        currentConfig?.modelId || '',
+        currentConfig?.apiKey || undefined,
+        (newStatus) => updateProject(projectId, { status: newStatus }),
+        { preset: reviewPreset },
+        currentConfig?.baseUrl || undefined
       );
       // Refresh downstream render with new code
-      setGeneratedPlotBase64(null);
-      setRenderLogs('');
-      setRenderError('');
+      updateProject(projectId, {
+        generatedPlotBase64: null,
+        renderLogs: '',
+        renderError: '',
+        result: refinedData,
+        status: AnalysisStatus.SUCCESS,
+      });
 
-      setResult(refinedData);
-      setStatus(AnalysisStatus.SUCCESS);
       const riskValue = refinedData.riskScore;
       const effectiveRisk = typeof riskValue === 'number' && Number.isFinite(riskValue)
         ? riskValue
@@ -377,8 +439,10 @@ export default function App() {
       }
     } catch (e: any) {
       console.error("Refinement Error:", e);
-      setStatus(AnalysisStatus.ERROR);
-      setErrorMessage(e.message || "Refinement failed.");
+      updateProject(projectId, {
+        status: AnalysisStatus.ERROR,
+        errorMessage: e.message || "Refinement failed.",
+      });
       addToast("Refinement failed", "error");
     } finally {
       pendingAutoRef.current = false;
@@ -389,7 +453,7 @@ export default function App() {
   const handleAutoRefinementTrigger = async (renderedImageBase64: string) => {
     if (runMode === 'simple') return;
     
-    if (!apiKey) return;
+    if (!currentConfig?.apiKey) return;
     if (!autoRefineEnabled || !isFirstPass || !selectedImage || !result || loopBudgetRef.current <= 0) return;
     
     setIsFirstPass(false); 
@@ -410,7 +474,7 @@ export default function App() {
   const handleAutoRefinementErrorTrigger = async (errorText: string) => {
     if (runMode === 'simple') return;
 
-    if (!apiKey) return;
+    if (!currentConfig?.apiKey) return;
     if (!autoRefineEnabled || !isFirstPass || !selectedImage || !result || loopBudgetRef.current <= 0) return;
     setIsFirstPass(false); 
     setIsCapturing(true);
@@ -425,7 +489,7 @@ export default function App() {
 
   const handleCrashRecoveryOnce = async (errorText: string) => {
     if (!selectedImage || !result) return;
-    if (!apiKey) return;
+    if (!currentConfig?.apiKey) return;
     if (crashRecoveryUsedRef.current) return;
     crashRecoveryUsedRef.current = true;
     setIsCapturing(true);
@@ -500,10 +564,10 @@ export default function App() {
       <SettingsModal 
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)}
-        apiKey={apiKey}
-        setApiKey={setApiKey}
-        model={model}
-        setModel={setModel}
+        selectedConfigId={selectedConfigId}
+        setSelectedConfigId={setSelectedConfigId}
+        modelConfigs={modelConfigs}
+        setModelConfigs={setModelConfigs}
         darkMode={darkMode}
         toggleTheme={() => setDarkMode(!darkMode)}
       />
@@ -514,6 +578,27 @@ export default function App() {
         darkMode={darkMode}
       />
 
+      <ConfirmDialog
+        isOpen={deleteConfirm.isOpen}
+        onClose={() => setDeleteConfirm({ isOpen: false, projectId: null })}
+        onConfirm={() => {
+          const id = deleteConfirm.projectId;
+          if (!id) return;
+          setProjects(prev => prev.filter(p => p.id !== id));
+          if (activeProjectId === id) {
+            const remaining = projects.filter(p => p.id !== id);
+            if (remaining.length > 0) switchProject(remaining[0].id);
+            else createNewProject();
+          }
+          addToast('Project deleted', 'success');
+        }}
+        title="Delete Project"
+        message="Are you sure you want to delete this project? This action cannot be undone."
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+      />
+
       {/* 1. Sidebar */}
       <ProjectSidebar
         projects={projects}
@@ -521,14 +606,7 @@ export default function App() {
         onSelectProject={switchProject}
         onCreateProject={createNewProject}
         onDeleteProject={(id) => {
-          if (window.confirm('Delete project?')) {
-            setProjects(prev => prev.filter(p => p.id !== id));
-            if (activeProjectId === id) {
-              const remaining = projects.filter(p => p.id !== id);
-              if (remaining.length > 0) switchProject(remaining[0].id);
-              else createNewProject();
-            }
-          }
+          setDeleteConfirm({ isOpen: true, projectId: id });
         }}
         onRenameProject={renameProject}
         onOpenDocs={() => setIsDocsOpen(true)}
@@ -537,6 +615,9 @@ export default function App() {
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        modelConfigs={modelConfigs}
+        selectedConfigId={selectedConfigId}
+        onSelectConfig={setSelectedConfigId}
       />
 
       {/* 2. Main Content Area */}
@@ -573,6 +654,7 @@ export default function App() {
                     setReviewPreset={setReviewPreset}
                     maxAutoLoops={maxAutoLoops}
                     setMaxAutoLoops={setMaxAutoLoops}
+                    onShowToast={addToast}
                   />
                 </div>
 
@@ -631,6 +713,7 @@ export default function App() {
              {/* RIGHT COLUMN: Inspector (Code/Review/Logs) */}
              <div className="flex-1 min-w-0 h-full bg-white dark:bg-zinc-900 flex flex-col">
                 <AnalysisView 
+                  key={activeProjectId}
                   status={status}
                   result={result}
                   renderLogs={renderLogs}

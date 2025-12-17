@@ -59,12 +59,19 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
     if (!code.trim()) return;
     setStatus("running");
 
+    // 3 minute timeout for rendering
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180000);
+
     try {
       const response = await fetch(RENDER_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, timeout: 120 }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       const contentType = response.headers.get("content-type") || "";
       let payload: any = null;
@@ -104,7 +111,11 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
       setStatus("success");
       onRenderComplete?.(resultBase64, combinedLogs);
     } catch (err: any) {
-      const message = err?.message || "Renderer call failed.";
+      clearTimeout(timeoutId);
+      let message = err?.message || "Renderer call failed.";
+      if (err.name === 'AbortError') {
+        message = "Rendering timed out (>3 min). The code may be too complex or stuck in an infinite loop.";
+      }
       setStatus("error");
       onRuntimeError?.(message, "");
     }

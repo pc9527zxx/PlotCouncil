@@ -1,6 +1,15 @@
 import React, { useState } from 'react';
-import { Plus, Folder, Layout, Settings, Github, PanelLeftClose, PanelLeftOpen, FolderOpen, Sun, Moon, Wrench, BookOpen, Pencil } from 'lucide-react';
-import { Project } from '../types';
+import { Plus, Folder, Layout, Settings, Github, PanelLeftClose, PanelLeftOpen, FolderOpen, Sun, Moon, Wrench, BookOpen, Pencil, Trash2, Cpu, ChevronDown, Check, Loader2 } from 'lucide-react';
+import { Project, AnalysisStatus } from '../types';
+import { ModelConfig } from '../services/projectStore';
+
+// Helper to check if a project is running
+const isProjectRunning = (status?: AnalysisStatus): boolean => {
+  if (!status) return false;
+  return status !== AnalysisStatus.IDLE && 
+         status !== AnalysisStatus.SUCCESS && 
+         status !== AnalysisStatus.ERROR;
+};
 
 interface ProjectSidebarProps {
   projects: Project[]; 
@@ -15,6 +24,10 @@ interface ProjectSidebarProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
+  // Model selection
+  modelConfigs?: ModelConfig[];
+  selectedConfigId?: string;
+  onSelectConfig?: (id: string) => void;
 }
 
 const getRelativeTime = (timestamp: number) => {
@@ -46,10 +59,16 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onToggleTheme,
   collapsed,
   onToggleCollapse,
-  onOpenSettings
+  onOpenSettings,
+  modelConfigs = [],
+  selectedConfigId = '',
+  onSelectConfig
 }) => {
   const [editingId, setEditingId] = useState<string>('');
   const [draftName, setDraftName] = useState<string>('');
+  const [showModelMenu, setShowModelMenu] = useState(false);
+
+  const currentModel = modelConfigs.find(c => c.id === selectedConfigId);
 
   const startEditing = (id: string, name: string) => {
     setEditingId(id);
@@ -232,25 +251,46 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                     ) : (
                       <>
                         <div className="flex-1 min-w-0 overflow-hidden">
-                          <div className="text-xs font-medium truncate text-slate-700 dark:text-slate-200 group-hover:text-slate-900 dark:group-hover:text-white">
+                          <div className="text-xs font-medium truncate text-slate-700 dark:text-slate-200 group-hover:text-slate-900 dark:group-hover:text-white flex items-center gap-1.5">
                             {project.name}
+                            {/* Running indicator */}
+                            {isProjectRunning(project.status) && (
+                              <Loader2 className="w-3 h-3 text-indigo-500 animate-spin shrink-0" />
+                            )}
                           </div>
                           <div className="text-[9px] text-slate-400 truncate mt-0.5 font-medium opacity-80" title={new Date(project.updatedAt).toLocaleString()}>
-                            {getRelativeTime(project.updatedAt)}
+                            {isProjectRunning(project.status) 
+                              ? <span className="text-indigo-500">Running...</span>
+                              : getRelativeTime(project.updatedAt)
+                            }
                           </div>
                         </div>
-                        {onRenameProject && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startEditing(project.id, project.name);
-                            }}
-                            className="ml-auto p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded transition-colors opacity-0 group-hover:opacity-100"
-                            title="Rename project"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                        <div className="flex items-center gap-0.5 ml-auto opacity-0 group-hover:opacity-100">
+                          {onRenameProject && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startEditing(project.id, project.name);
+                              }}
+                              className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded transition-colors"
+                              title="Rename project"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {onDeleteProject && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteProject(project.id);
+                              }}
+                              className="p-1 text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 rounded transition-colors"
+                              title="Delete project"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </>
                     )}
                  </div>
@@ -266,6 +306,77 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             </button>
          ))}
       </div>
+
+      {/* Model Selector at Bottom */}
+      {modelConfigs.length > 0 && (
+        <div className={`shrink-0 border-t border-slate-200 dark:border-slate-800 ${collapsed ? 'p-2' : 'p-3'}`}>
+          {!collapsed ? (
+            <div className="relative">
+              <button
+                onClick={() => setShowModelMenu(!showModelMenu)}
+                className="w-full flex items-center justify-between gap-2 px-2.5 py-2 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded-lg transition-colors text-left group"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${currentModel?.apiKey ? 'bg-emerald-500' : 'bg-rose-400'}`} />
+                  <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 truncate">
+                    {currentModel?.modelId || 'Select Model'}
+                  </span>
+                </div>
+                <ChevronDown className={`w-3 h-3 text-slate-400 shrink-0 transition-transform ${showModelMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Dropdown Menu */}
+              {showModelMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowModelMenu(false)} />
+                  <div className="absolute bottom-full left-0 right-0 mb-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
+                    {modelConfigs.map((config) => (
+                      <button
+                        key={config.id}
+                        onClick={() => {
+                          onSelectConfig?.(config.id);
+                          setShowModelMenu(false);
+                        }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors first:rounded-t-lg last:rounded-b-lg ${
+                          selectedConfigId === config.id ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
+                        }`}
+                      >
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${config.apiKey ? 'bg-emerald-500' : 'bg-rose-400'}`} />
+                        <span className={`text-[10px] font-medium truncate flex-1 ${selectedConfigId === config.id ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300'}`}>
+                          {config.modelId}
+                        </span>
+                        {selectedConfigId === config.id && (
+                          <Check className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                    <div className="border-t border-slate-100 dark:border-zinc-800">
+                      <button
+                        onClick={() => {
+                          setShowModelMenu(false);
+                          onOpenSettings();
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors rounded-b-lg"
+                      >
+                        <Settings className="w-3 h-3 text-slate-400" />
+                        <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">Manage Models...</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={onOpenSettings}
+              className={`w-full flex justify-center p-2 rounded-lg transition-colors ${currentModel ? 'bg-slate-100 dark:bg-zinc-800' : 'bg-rose-100 dark:bg-rose-900/30'}`}
+              title={currentModel?.modelId || 'Configure Model'}
+            >
+              <Cpu className={`w-4 h-4 ${currentModel?.apiKey ? 'text-emerald-600' : 'text-rose-500'}`} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

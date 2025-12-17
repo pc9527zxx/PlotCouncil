@@ -3,6 +3,246 @@ import { GoogleGenAI } from "@google/genai";
 import { AnalysisResult, AnalysisStatus, TeacherReview, ChairDecision } from "../types";
 import { STUDENT_INSTRUCTION, TEACHER_STYLE_INSTRUCTION, TEACHER_LAYOUT_INSTRUCTION, TEACHER_DATA_INSTRUCTION, CHAIR_QA_INSTRUCTION, CHAIR_STRATEGY_INSTRUCTION, STUDENT_REVISION_INSTRUCTION, REVIEWER_LITE_INSTRUCTION } from "./prompts";
 
+// ============================================================================
+// Universal API Client - Supports both Google Gemini and OpenAI-compatible APIs
+// ============================================================================
+
+interface UniversalClientConfig {
+  apiKey: string;
+  baseUrl?: string;
+  modelName: string;
+}
+
+interface ContentPart {
+  text?: string;
+  inlineData?: { mimeType: string; data: string };
+}
+
+// Detect if baseUrl is OpenAI-compatible (e.g., SiliconFlow, OpenRouter, etc.)
+const isOpenAICompatible = (baseUrl?: string): boolean => {
+  if (!baseUrl) return false;
+  const url = baseUrl.toLowerCase();
+  return url.includes('/v1') || 
+         url.includes('openai') || 
+         url.includes('siliconflow') ||
+         url.includes('openrouter') ||
+         url.includes('together') ||
+         url.includes('groq') ||
+         url.includes('deepseek');
+};
+
+// Convert Google-style parts to OpenAI messages
+const convertToOpenAIMessages = (
+  parts: ContentPart[],
+  systemInstruction?: string
+): any[] => {
+  const messages: any[] = [];
+  
+  if (systemInstruction) {
+    messages.push({ role: 'system', content: systemInstruction });
+  }
+
+  const userContent: any[] = [];
+  for (const part of parts) {
+    if (part.text) {
+      userContent.push({ type: 'text', text: part.text });
+    } else if (part.inlineData) {
+      userContent.push({
+        type: 'image_url',
+        image_url: {
+          url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+        }
+      });
+    }
+  }
+
+  messages.push({ role: 'user', content: userContent });
+  return messages;
+};
+
+// Get the backend proxy URL (same origin as the app, or from env)
+const getProxyUrl = (): string => {
+  // Check for environment variable first
+  const envUrl = (import.meta as any).env?.VITE_RENDER_API_URL;
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '');
+  }
+  // Default to same origin (works when served from FastAPI backend)
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+  return 'http://localhost:8000';
+};
+
+// Call OpenAI-compatible API via backend proxy (avoids CORS issues)
+const callOpenAIViaProxy = async (
+  config: UniversalClientConfig,
+  parts: ContentPart[],
+  systemInstruction?: string,
+  temperature: number = 0.2
+): Promise<string> => {
+  const proxyUrl = getProxyUrl();
+  const messages = convertToOpenAIMessages(parts, systemInstruction);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 min timeout
+
+  try {
+    const response = await fetch(`${proxyUrl}/api/llm/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        base_url: config.baseUrl,
+        api_key: config.apiKey,
+        model: config.modelName,
+        messages,
+        temperature,
+        max_tokens: 16384,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(errorData.detail || `Proxy Error ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.content || '';
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout: The API took too long to respond (>5 min). Try a faster model.');
+    }
+    // Better error message for proxy connection failure
+    if (error.message === 'Failed to fetch') {
+      throw new Error(`Cannot connect to proxy server at ${proxyUrl}. Start backend: uvicorn server.main:app --reload`);
+    }
+    throw error;
+  }
+};
+
+// Call OpenAI-compatible API directly (for APIs that support CORS)
+const callOpenAIDirect = async (
+  config: UniversalClientConfig,
+  parts: ContentPart[],
+  systemInstruction?: string,
+  temperature: number = 0.2
+): Promise<string> => {
+  // Ensure baseUrl ends without trailing slash
+  let baseUrl = config.baseUrl?.replace(/\/+$/, '') || '';
+  // If baseUrl doesn't end with /chat/completions, append it
+  const endpoint = baseUrl.includes('/chat/completions') 
+    ? baseUrl 
+    : `${baseUrl}/chat/completions`;
+
+  const messages = convertToOpenAIMessages(parts, systemInstruction);
+
+  // Create AbortController for timeout (10 minutes for large requests)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 min timeout
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.modelName,
+        messages,
+        temperature,
+        max_tokens: 16384,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout (>10 min). Try a faster model like gemini-2.0-flash or reduce image size.');
+    }
+    throw error;
+  }
+};
+
+// Call OpenAI-compatible API with automatic fallback to proxy
+const callOpenAICompatible = async (
+  config: UniversalClientConfig,
+  parts: ContentPart[],
+  systemInstruction?: string,
+  temperature: number = 0.2
+): Promise<string> => {
+  // First try direct call
+  try {
+    return await callOpenAIDirect(config, parts, systemInstruction, temperature);
+  } catch (directError: any) {
+    // If it's a CORS/network error, try the proxy
+    if (directError.message === 'Failed to fetch' || 
+        directError.message?.includes('NetworkError') ||
+        directError.message?.includes('CORS')) {
+      console.log('Direct API call failed (likely CORS), falling back to proxy...');
+      try {
+        return await callOpenAIViaProxy(config, parts, systemInstruction, temperature);
+      } catch (proxyError: any) {
+        // If proxy also fails, throw a helpful error
+        throw new Error(
+          `API call failed.\n` +
+          `Direct: ${directError.message}\n` +
+          `Proxy: ${proxyError.message}\n\n` +
+          `Make sure the backend server is running: uvicorn server.main:app --reload`
+        );
+      }
+    }
+    // For non-CORS errors, just throw the original error
+    throw directError;
+  }
+};
+
+// Universal generate function
+const universalGenerate = async (
+  config: UniversalClientConfig,
+  parts: ContentPart[],
+  systemInstruction?: string,
+  temperature: number = 0.2
+): Promise<string> => {
+  if (isOpenAICompatible(config.baseUrl)) {
+    return callOpenAICompatible(config, parts, systemInstruction, temperature);
+  }
+
+  // Use Google GenAI SDK
+  const clientOptions: { apiKey: string; baseURL?: string } = { apiKey: config.apiKey };
+  if (config.baseUrl?.trim()) {
+    clientOptions.baseURL = config.baseUrl.trim();
+  }
+  const client = new GoogleGenAI(clientOptions);
+
+  const response = await client.models.generateContent({
+    model: config.modelName,
+    contents: { parts },
+    config: { systemInstruction, temperature },
+  });
+
+  return response.text || '';
+};
+
+// ============================================================================
+
 function handleError(error: any) {
     let message = "An unexpected error occurred.";
     if (error instanceof Error) {
@@ -56,7 +296,8 @@ export const analyzePlotImage = async (
   mimeType: string, 
   modelName: string,
   customApiKey?: string,
-  onStatusUpdate?: (status: any) => void
+  onStatusUpdate?: (status: any) => void,
+  customBaseUrl?: string
 ): Promise<AnalysisResult> => {
   const finalApiKey = customApiKey?.trim() || process.env.API_KEY;
 
@@ -64,27 +305,22 @@ export const analyzePlotImage = async (
     throw new Error("API Key is missing. Please enter a custom key in the settings menu.");
   }
 
-  const client = new GoogleGenAI({ apiKey: finalApiKey });
+  const config: UniversalClientConfig = {
+    apiKey: finalApiKey,
+    baseUrl: customBaseUrl?.trim(),
+    modelName,
+  };
 
   try {
     if (onStatusUpdate) onStatusUpdate('ANALYZING'); 
     
     console.log("Phase 1: Student Agent (Coder) Starting...");
-    const studentResponse = await client.models.generateContent({
-      model: modelName,
-      contents: {
-        parts: [
-          { inlineData: { mimeType: mimeType, data: base64Image } },
-          { text: "Analyze this scientific figure. First, provide a detailed VISUAL ANALYSIS (Axes, Data, Layout). Then, EXTRACT all data into the JSON schema and finally WRITE THE PYTHON CODE to replicate it." },
-        ],
-      },
-      config: {
-        systemInstruction: STUDENT_INSTRUCTION,
-        temperature: 0.2, 
-      },
-    });
+    const parts: ContentPart[] = [
+      { inlineData: { mimeType: mimeType, data: base64Image } },
+      { text: "Analyze this scientific figure. First, provide a detailed VISUAL ANALYSIS (Axes, Data, Layout). Then, EXTRACT all data into the JSON schema and finally WRITE THE PYTHON CODE to replicate it." },
+    ];
 
-    const studentOutput = studentResponse.text;
+    const studentOutput = await universalGenerate(config, parts, STUDENT_INSTRUCTION, 0.2);
     if (!studentOutput) throw new Error("Student Agent returned empty response.");
 
     // RETURN EARLY - Let the App render this code first!
@@ -94,7 +330,7 @@ export const analyzePlotImage = async (
     };
 
   } catch (error: any) {
-    console.error("Gemini API Error details:", error);
+    console.error("API Error details:", error);
     handleError(error);
     throw error; 
   }
@@ -109,18 +345,23 @@ export const refinePlotAnalysis = async (
   modelName: string,
   customApiKey?: string,
   onStatusUpdate?: (status: any) => void,
-  options?: { preset?: 'lite' | 'full' }
+  options?: { preset?: 'lite' | 'full' },
+  customBaseUrl?: string
 ): Promise<AnalysisResult> => {
   const finalApiKey = customApiKey?.trim() || process.env.API_KEY;
   if (!finalApiKey) throw new Error("API Key is missing.");
 
-  const client = new GoogleGenAI({ apiKey: finalApiKey });
+  const config: UniversalClientConfig = {
+    apiKey: finalApiKey,
+    baseUrl: customBaseUrl?.trim(),
+    modelName,
+  };
 
   try {
     const preset = options?.preset ?? 'full';
 
-    const buildCompareParts = () => {
-      const parts: any[] = [];
+    const buildCompareParts = (): ContentPart[] => {
+      const parts: ContentPart[] = [];
       if (feedback.type === 'image' && feedback.mimeType) {
         parts.push({ text: "IMAGE 1: ORIGINAL TARGET" });
         parts.push({ inlineData: { mimeType: originalImageMime, data: originalImageBase64 } });
@@ -140,13 +381,8 @@ export const refinePlotAnalysis = async (
     // ========================================================================
     if (preset === 'lite') {
       if (onStatusUpdate) onStatusUpdate(AnalysisStatus.CHAIR_QA);
-      const liteResponse = await client.models.generateContent({
-        model: modelName,
-        contents: { parts: buildCompareParts() },
-        config: { systemInstruction: REVIEWER_LITE_INSTRUCTION, temperature: 0.1 }
-      });
+      const liteSummary = await universalGenerate(config, buildCompareParts(), REVIEWER_LITE_INSTRUCTION, 0.1);
 
-      const liteSummary = liteResponse.text || '';
       const liteJson = extractJsonFromText(liteSummary);
       const riskRaw = liteJson?.risk_score;
       const riskScore =
@@ -172,25 +408,17 @@ export const refinePlotAnalysis = async (
       ];
 
       if (onStatusUpdate) onStatusUpdate(AnalysisStatus.REFINING);
-      const studentParts = [
+      const studentParts: ContentPart[] = [
         { text: `CURRENT PYTHON CODE:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` },
         { text: `LITE REVIEWER SUMMARY:\n${liteSummary}` },
-        studentBrief ? { text: `STUDENT BRIEF:\n${studentBrief}` } : null,
-      ].filter(Boolean) as any[];
+        ...(studentBrief ? [{ text: `STUDENT BRIEF:\n${studentBrief}` }] : []),
+      ];
 
-      const studentRevisionResponse = await client.models.generateContent({
-        model: modelName,
-        contents: { parts: studentParts },
-        config: {
-          systemInstruction: STUDENT_REVISION_INSTRUCTION,
-          temperature: 0.05
-        }
-      });
-
-      if (!studentRevisionResponse.text) throw new Error("Student Coder returned an empty response.");
+      const studentRevisionText = await universalGenerate(config, studentParts, STUDENT_REVISION_INSTRUCTION, 0.05);
+      if (!studentRevisionText) throw new Error("Student Coder returned an empty response.");
 
       return {
-        markdown: studentRevisionResponse.text,
+        markdown: studentRevisionText,
         teacherCritique: liteSummary,
         teacherReviews: [],
         chairFindings,
@@ -206,8 +434,8 @@ export const refinePlotAnalysis = async (
       { role: 'DATA' as const, instruction: TEACHER_DATA_INSTRUCTION, status: AnalysisStatus.TEACHER_DATA_REVIEW },
     ];
 
-    const buildTeacherPromptParts = () => {
-      const parts: any[] = [];
+    const buildTeacherPromptParts = (): ContentPart[] => {
+      const parts: ContentPart[] = [];
       if (feedback.type === 'image' && feedback.mimeType) {
         parts.push({ text: "IMAGE 1: ORIGINAL TARGET" });
         parts.push({ inlineData: { mimeType: originalImageMime, data: originalImageBase64 } });
@@ -224,17 +452,10 @@ export const refinePlotAnalysis = async (
     const teacherReviews: TeacherReview[] = [];
     for (const agent of teacherAgents) {
       if (onStatusUpdate) onStatusUpdate(agent.status);
-      const response = await client.models.generateContent({
-        model: modelName,
-        contents: { parts: buildTeacherPromptParts() },
-        config: {
-          systemInstruction: agent.instruction,
-          temperature: 0.1,
-        }
-      });
+      const responseText = await universalGenerate(config, buildTeacherPromptParts(), agent.instruction, 0.1);
       teacherReviews.push({
         role: agent.role,
-        findings: response.text || ''
+        findings: responseText || ''
       });
     }
 
@@ -243,21 +464,13 @@ export const refinePlotAnalysis = async (
     // ========================================================================
     if (onStatusUpdate) onStatusUpdate(AnalysisStatus.CHAIR_QA);
     const teacherJson = JSON.stringify(teacherReviews, null, 2);
-    const qaParts = [
+    const qaParts: ContentPart[] = [
       { text: `TEACHER REVIEWS:\n${teacherJson}` },
       { text: `CURRENT PYTHON CODE:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` }
     ];
 
-    const qaResponse = await client.models.generateContent({
-      model: modelName,
-      contents: { parts: qaParts },
-      config: {
-        systemInstruction: CHAIR_QA_INSTRUCTION,
-        temperature: 0.1,
-      }
-    });
+    const qaSummary = await universalGenerate(config, qaParts, CHAIR_QA_INSTRUCTION, 0.1);
 
-    const qaSummary = qaResponse.text || '';
     const qaJson = extractJsonFromText(qaSummary);
     const qaRiskRaw = qaJson?.risk_score;
     const qaRisk =
@@ -283,21 +496,13 @@ export const refinePlotAnalysis = async (
     // CHAIR STRATEGY (Brief for Student)
     // ========================================================================
     if (onStatusUpdate) onStatusUpdate(AnalysisStatus.CHAIR_STRATEGY);
-    const strategyParts = [
+    const strategyParts: ContentPart[] = [
       { text: `TEACHER REVIEWS:\n${teacherJson}` },
       { text: `QA SUMMARY:\n${qaSummary}` }
     ];
 
-    const strategyResponse = await client.models.generateContent({
-      model: modelName,
-      contents: { parts: strategyParts },
-      config: {
-        systemInstruction: CHAIR_STRATEGY_INSTRUCTION,
-        temperature: 0.1,
-      }
-    });
+    const strategySummary = await universalGenerate(config, strategyParts, CHAIR_STRATEGY_INSTRUCTION, 0.1);
 
-    const strategySummary = strategyResponse.text || '';
     const strategyJson = extractJsonFromText(strategySummary);
     const strategyActions = Array.isArray(strategyJson?.action_items)
       ? strategyJson.action_items.map((item: any) => {
@@ -312,26 +517,18 @@ export const refinePlotAnalysis = async (
     // STUDENT REVISION (Code Fixes)
     // ========================================================================
     if (onStatusUpdate) onStatusUpdate(AnalysisStatus.REFINING);
-    const studentParts = [
+    const studentParts: ContentPart[] = [
       { text: `CURRENT PYTHON CODE:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` },
       { text: `TEACHER REVIEWS:\n${teacherJson}` },
       { text: `QA SUMMARY:\n${qaSummary}` },
       { text: `CHAIR STRATEGY BRIEF:\n${strategySummary}` }
     ];
 
-    const studentRevisionResponse = await client.models.generateContent({
-      model: modelName,
-      contents: { parts: studentParts },
-      config: {
-        systemInstruction: STUDENT_REVISION_INSTRUCTION,
-        temperature: 0.05
-      }
-    });
-
-    if (!studentRevisionResponse.text) throw new Error("Student Coder returned an empty response.");
+    const studentRevisionText = await universalGenerate(config, studentParts, STUDENT_REVISION_INSTRUCTION, 0.05);
+    if (!studentRevisionText) throw new Error("Student Coder returned an empty response.");
 
     return {
-      markdown: studentRevisionResponse.text,
+      markdown: studentRevisionText,
       teacherCritique: qaSummary,
       teacherReviews,
       chairFindings,

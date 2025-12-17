@@ -165,4 +165,6 @@ export interface Project {
   generatedPlotBase64: string | null;
   renderLogs: string;
   renderError: string;
+  // Runtime status (per-project)
+  status?: AnalysisStatus;
 }

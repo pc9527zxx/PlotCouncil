@@ -11,12 +11,13 @@ import textwrap
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Any, Dict
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -59,7 +60,7 @@ class RenderRequest(BaseModel):
     width: float = Field(12.0, ge=1.0, le=60.0, description="Figure width in inches")
     height: float = Field(8.0, ge=1.0, le=60.0, description="Figure height in inches")
     dpi: int = Field(150, ge=50, le=600, description="Figure DPI")
-    timeout: float = Field(30.0, ge=1.0, le=180.0, description="Max execution time in seconds")
+    timeout: float = Field(120.0, ge=1.0, le=600.0, description="Max execution time in seconds")
 
 
 class RenderResponse(BaseModel):
@@ -67,6 +68,140 @@ class RenderResponse(BaseModel):
     logs: str
     error: Optional[str]
     artifact_id: str
+
+
+# =============================================================================
+# LLM Proxy - Forward requests to any OpenAI-compatible API (bypasses CORS)
+# =============================================================================
+
+class LLMProxyRequest(BaseModel):
+    """Request body for LLM proxy endpoint."""
+    base_url: str = Field(..., description="Base URL of the LLM API (e.g., https://api.siliconflow.cn/v1)")
+    api_key: str = Field(..., description="API key for authentication")
+    model: str = Field(..., description="Model name/ID")
+    messages: List[Dict[str, Any]] = Field(..., description="OpenAI-format messages array")
+    temperature: float = Field(0.2, ge=0.0, le=2.0, description="Sampling temperature")
+    max_tokens: int = Field(16384, ge=1, le=128000, description="Max tokens to generate")
+    stream: bool = Field(False, description="Whether to stream the response")
+
+
+class LLMProxyResponse(BaseModel):
+    """Response from LLM proxy endpoint."""
+    content: str = Field(..., description="Generated text content")
+    model: Optional[str] = Field(None, description="Model used")
+    usage: Optional[Dict[str, int]] = Field(None, description="Token usage stats")
+
+
+@app.post("/api/llm/chat", response_model=LLMProxyResponse)
+async def llm_proxy_chat(request: LLMProxyRequest) -> LLMProxyResponse:
+    """
+    Proxy endpoint for OpenAI-compatible LLM APIs.
+    
+    This endpoint forwards requests to any OpenAI-compatible API, bypassing
+    browser CORS restrictions. Supports providers like:
+    - SiliconFlow
+    - OpenRouter
+    - Together AI
+    - Groq
+    - DeepSeek
+    - Any OpenAI-compatible endpoint
+    """
+    # Normalize base URL
+    base_url = request.base_url.rstrip("/")
+    if not base_url.endswith("/chat/completions"):
+        endpoint = f"{base_url}/chat/completions"
+    else:
+        endpoint = base_url
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {request.api_key}",
+    }
+    
+    payload = {
+        "model": request.model,
+        "messages": request.messages,
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens,
+        "stream": False,  # Always non-streaming for this endpoint
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:  # 10 min timeout
+            response = await client.post(endpoint, json=payload, headers=headers)
+            
+            if response.status_code != 200:
+                error_text = response.text[:500]  # Limit error text length
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"LLM API Error: {error_text}"
+                )
+            
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            model_used = data.get("model")
+            usage = data.get("usage")
+            
+            return LLMProxyResponse(
+                content=content,
+                model=model_used,
+                usage=usage,
+            )
+            
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="LLM API request timed out (>5 min)")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Network error: {str(exc)}")
+
+
+@app.post("/api/llm/chat/stream")
+async def llm_proxy_chat_stream(request: LLMProxyRequest):
+    """
+    Streaming proxy endpoint for OpenAI-compatible LLM APIs.
+    Returns Server-Sent Events (SSE) stream.
+    """
+    base_url = request.base_url.rstrip("/")
+    if not base_url.endswith("/chat/completions"):
+        endpoint = f"{base_url}/chat/completions"
+    else:
+        endpoint = base_url
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {request.api_key}",
+    }
+    
+    payload = {
+        "model": request.model,
+        "messages": request.messages,
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens,
+        "stream": True,
+    }
+    
+    async def generate():
+        async with httpx.AsyncClient(timeout=600.0) as client:  # 10 min timeout
+            async with client.stream("POST", endpoint, json=payload, headers=headers) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    yield f"data: {json.dumps({'error': error_text.decode()[:500]})}\n\n"
+                    return
+                    
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        yield f"{line}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+# =============================================================================
 
 
 @app.get("/health")
@@ -126,7 +261,13 @@ def _build_worker_script(req: RenderRequest) -> str:
         import sys
         import textwrap
         import traceback
+        import warnings
         from contextlib import redirect_stdout, redirect_stderr
+
+        # Suppress font warnings
+        warnings.filterwarnings("ignore", message=".*Glyph.*missing from.*")
+        warnings.filterwarnings("ignore", message=".*FigureCanvasAgg is non-interactive.*")
+        warnings.filterwarnings("ignore", message=".*font cache.*")
 
         import matplotlib
         matplotlib.use("Agg")
@@ -137,6 +278,9 @@ def _build_worker_script(req: RenderRequest) -> str:
         import pandas as pd
         import scipy
 
+        # Configure matplotlib to use fonts with better Unicode support
+        plt.rcParams["font.family"] = ["DejaVu Sans", "sans-serif"]
+        plt.rcParams["mathtext.fontset"] = "dejavusans"
         plt.rcParams["figure.figsize"] = ({req.width}, {req.height})
         plt.rcParams["figure.dpi"] = {req.dpi}
         plt.rcParams["savefig.facecolor"] = "white"

@@ -1,6 +1,13 @@
 import { openDB, type DBSchema } from 'idb';
 import { Project, PlotSnapshot, PlotImage, AnalysisResult } from '../types';
 
+export interface ModelConfig {
+  id: string;
+  modelId: string;
+  baseUrl: string;
+  apiKey: string;
+}
+
 interface PlotCouncilDB extends DBSchema {
   projects: {
     key: string;
@@ -16,6 +23,9 @@ const DB_NAME = 'plotcouncil';
 const LEGACY_DB_NAME = 'sciplot-analyst';
 const DB_VERSION = 1;
 const META_ACTIVE_PROJECT_ID = 'activeProjectId';
+const META_MODEL_CONFIGS = 'modelConfigs';
+const META_SELECTED_CONFIG_ID = 'selectedConfigId';
+const META_MAX_LOOPS = 'maxLoops';
 
 // Legacy localStorage keys (from earlier implementation)
 const LEGACY_PROJECTS_STORAGE_KEY = 'sciplot-projects-v1';
@@ -112,6 +122,79 @@ export const saveProjectsSnapshot = async (projects: Project[], activeProjectId:
   }
   await tx.objectStore('meta').put({ key: META_ACTIVE_PROJECT_ID, value: activeProjectId });
   await tx.done;
+};
+
+export const deleteProject = async (projectId: string): Promise<void> => {
+  const db = await dbPromise;
+  await db.delete('projects', projectId);
+};
+
+// === Model Configuration Storage ===
+
+export const loadModelConfigs = async (): Promise<{ configs: ModelConfig[]; selectedConfigId: string | null; maxLoops: number }> => {
+  const db = await dbPromise;
+  const configsMeta = await db.get('meta', META_MODEL_CONFIGS);
+  const selectedMeta = await db.get('meta', META_SELECTED_CONFIG_ID);
+  const loopsMeta = await db.get('meta', META_MAX_LOOPS);
+
+  const configs = Array.isArray(configsMeta?.value) ? configsMeta.value as ModelConfig[] : [];
+  const selectedConfigId = typeof selectedMeta?.value === 'string' ? selectedMeta.value : null;
+  const maxLoops = typeof loopsMeta?.value === 'number' ? loopsMeta.value : 3;
+
+  return { configs, selectedConfigId, maxLoops };
+};
+
+export const saveModelConfigs = async (configs: ModelConfig[], selectedConfigId: string | null, maxLoops: number): Promise<void> => {
+  const db = await dbPromise;
+  const tx = db.transaction('meta', 'readwrite');
+  await tx.store.put({ key: META_MODEL_CONFIGS, value: configs });
+  await tx.store.put({ key: META_SELECTED_CONFIG_ID, value: selectedConfigId });
+  await tx.store.put({ key: META_MAX_LOOPS, value: maxLoops });
+  await tx.done;
+};
+
+export const migrateModelConfigsFromLocalStorage = async (): Promise<boolean> => {
+  if (typeof window === 'undefined') return false;
+  
+  // Check if already migrated
+  const db = await dbPromise;
+  const existingConfigs = await db.get('meta', META_MODEL_CONFIGS);
+  if (existingConfigs?.value && Array.isArray(existingConfigs.value) && existingConfigs.value.length > 0) {
+    return false; // Already have configs in IDB
+  }
+
+  // Try to load from localStorage
+  const STORAGE_KEYS = {
+    modelConfigs: 'plotcouncil-model-configs',
+    selectedConfigId: 'plotcouncil-selected-config-id',
+    maxLoops: 'plotcouncil-max-loops',
+  };
+
+  const storedConfigs = window.localStorage.getItem(STORAGE_KEYS.modelConfigs);
+  const storedSelectedId = window.localStorage.getItem(STORAGE_KEYS.selectedConfigId);
+  const storedLoops = window.localStorage.getItem(STORAGE_KEYS.maxLoops);
+
+  if (!storedConfigs) return false;
+
+  try {
+    const configs = JSON.parse(storedConfigs);
+    if (!Array.isArray(configs) || configs.length === 0) return false;
+
+    const selectedConfigId = storedSelectedId || null;
+    const maxLoops = storedLoops ? parseInt(storedLoops, 10) : 3;
+
+    await saveModelConfigs(configs, selectedConfigId, maxLoops);
+
+    // Remove from localStorage after successful migration
+    window.localStorage.removeItem(STORAGE_KEYS.modelConfigs);
+    window.localStorage.removeItem(STORAGE_KEYS.selectedConfigId);
+    window.localStorage.removeItem(STORAGE_KEYS.maxLoops);
+
+    console.log('Migrated model configs from localStorage to IndexedDB');
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const migrateLegacyLocalStorageToIDB = async (): Promise<boolean> => {
