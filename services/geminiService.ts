@@ -630,3 +630,89 @@ export const refinePlotAnalysis = async (
     throw error;
   }
 };
+
+// ============================================================================
+// Quick Error Fix - Skip teacher review, directly fix runtime errors
+// ============================================================================
+
+const QUICK_FIX_INSTRUCTION = `You are a Python debugging expert. The student's Matplotlib code crashed with an error.
+Your task is to FIX THE ERROR and return working code.
+
+CRITICAL RULES:
+1. ONLY fix the specific error mentioned - do not change anything else
+2. Keep all the styling, layout, and data representation intact
+3. The fix should be minimal and targeted
+4. Output the COMPLETE corrected Python code
+5. Use ONLY matplotlib, numpy, and scipy - no other libraries
+
+Common fixes:
+- AttributeError: Check the correct method/property name for the matplotlib version
+- TypeError: Check argument types and correct function signatures
+- ValueError: Check data shapes and valid parameter values
+- KeyError: Check dictionary keys and correct spellings
+
+Output format:
+\`\`\`python
+# Your complete fixed code here
+\`\`\`
+`;
+
+export const quickFixError = async (
+  config: { apiKey: string; baseUrl?: string; modelId?: string },
+  originalImageBase64: string,
+  originalImageMime: string,
+  currentPythonCode: string,
+  errorText: string,
+  onUpdate?: (update: AnalysisUpdate) => void
+): Promise<AnalysisResult> => {
+  if (!config.apiKey) {
+    throw new Error("API key is missing. Please add your Gemini API key in settings.");
+  }
+
+  try {
+    if (onUpdate) {
+      onUpdate({ status: AnalysisStatus.REFINING });
+    }
+
+    const universalConfig: UniversalClientConfig = {
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      modelName: config.modelId || 'gemini-2.0-flash',
+    };
+
+    const parts: ContentPart[] = [
+      { text: "TARGET IMAGE (the plot we want to replicate):" },
+      { inlineData: { mimeType: originalImageMime, data: originalImageBase64 } },
+      { text: `CURRENT CODE THAT CRASHED:\n\`\`\`python\n${currentPythonCode}\n\`\`\`` },
+      { text: `ERROR MESSAGE:\n\`\`\`\n${errorText}\n\`\`\`` },
+      { text: "Fix this error and return the complete working code. Keep all styling intact." }
+    ];
+
+    const fixedCodeText = await universalGenerate(universalConfig, parts, QUICK_FIX_INSTRUCTION, 0.05);
+    
+    if (!fixedCodeText) {
+      throw new Error("Quick fix returned empty response");
+    }
+
+    return {
+      markdown: fixedCodeText,
+      teacherCritique: `Auto-fixed error: ${errorText.slice(0, 200)}...`,
+      teacherReviews: [],
+      chairFindings: [{
+        role: 'QA',
+        summary: JSON.stringify({
+          role: 'QuickFix',
+          overall_status: 'AUTO_FIXED',
+          error_fixed: errorText.slice(0, 500),
+          fix_applied: true
+        }, null, 2)
+      }],
+      qaStatus: 'UNKNOWN',
+      riskScore: 0.5,
+      timestamp: Date.now(),
+    };
+  } catch (error: any) {
+    handleError(error);
+    throw error;
+  }
+};

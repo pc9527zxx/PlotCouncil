@@ -7,7 +7,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { DocsPanel } from './components/DocsPanel';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toast, ToastItem, ToastType } from './components/Toast';
-import { analyzePlotImage, refinePlotAnalysis } from './services/geminiService';
+import { analyzePlotImage, refinePlotAnalysis, quickFixError } from './services/geminiService';
 import { PlotImage, AnalysisResult, AnalysisStatus, AnalysisUpdate, Project, PlotSnapshot, CodeVersion, WorkflowLogEntry } from './types';
 import { 
   loadProjectsSnapshot, 
@@ -212,7 +212,9 @@ export default function App() {
     }));
   }, []);
 
-  // Helper to add workflow log entry
+  // Helper to add workflow log entry (with deduplication)
+  const lastLogRef = useRef<{ message: string; agent?: string; timestamp: number } | null>(null);
+  
   const addWorkflowLog = useCallback((
     projectId: string,
     type: WorkflowLogEntry['type'],
@@ -220,8 +222,18 @@ export default function App() {
     agent?: string,
     details?: string
   ) => {
+    // Quick dedup check using ref (more reliable than state-based check)
+    const now = Date.now();
+    if (lastLogRef.current && 
+        lastLogRef.current.message === message && 
+        lastLogRef.current.agent === agent &&
+        now - lastLogRef.current.timestamp < 3000) {
+      return; // Skip duplicate
+    }
+    lastLogRef.current = { message, agent, timestamp: now };
+    
     const entry: WorkflowLogEntry = {
-      timestamp: Date.now(),
+      timestamp: now,
       type,
       message,
       agent,
@@ -261,7 +273,9 @@ export default function App() {
   const [loopBudget, setLoopBudget] = useState(0);
   const loopBudgetRef = useRef(0);
   const pendingAutoRef = useRef(false);
-  const crashRecoveryUsedRef = useRef(false);
+  const isRefiningRef = useRef(false);  // Lock to prevent duplicate refinements
+  const loggedItemsRef = useRef<Set<string>>(new Set());  // Track logged items to avoid duplicates
+  const lastRenderedHashRef = useRef<string>('');  // Track last rendered image to prevent duplicate callbacks
 
   const addToast = useCallback((message: string, type: ToastType = 'info') => {
     const id = Date.now().toString();
@@ -386,7 +400,7 @@ export default function App() {
     // Reset UI-only state
     setIsFirstPass(false);
     updateLoopBudget(0);
-    crashRecoveryUsedRef.current = false;
+    errorFixCountRef.current = 0;
   };
 
   const createNewProject = () => {
@@ -433,7 +447,7 @@ export default function App() {
     if (!image) {
       setIsFirstPass(false);
       updateLoopBudget(0);
-      crashRecoveryUsedRef.current = false;
+      errorFixCountRef.current = 0;
     }
   };
 
@@ -459,7 +473,9 @@ export default function App() {
       codeHistory: [],  // Clear code history on new analysis
       generatedSvgBase64: null,  // Clear SVG
     });
-    crashRecoveryUsedRef.current = false;
+    errorFixCountRef.current = 0;
+    autoTriggerPendingRef.current = false;  // Reset auto-trigger flag
+    lastRenderedHashRef.current = '';  // Reset render hash for new analysis
     
     const initialBudget = runMode === 'simple' 
       ? 0 
@@ -526,6 +542,16 @@ export default function App() {
   const handleRefine = async (feedbackType: 'image' | 'error', data: string, mimeType?: string) => {
     if (!selectedImage || !result || !activeProjectId) return;
     
+    // Prevent duplicate refinements
+    if (isRefiningRef.current) {
+      console.log('[handleRefine] Skipped - already refining');
+      addWorkflowLog(activeProjectId, 'warning', '跳过重复的审查请求');
+      return;
+    }
+    isRefiningRef.current = true;
+    loggedItemsRef.current.clear();  // Clear logged items for this refinement session
+    console.log('[handleRefine] Started');
+    
     // Capture project context for async operation
     const projectId = activeProjectId;
     const projectImage = selectedImage;
@@ -582,14 +608,22 @@ export default function App() {
               };
               return { ...p, result: mergedResult, updatedAt: Date.now() };
             }));
-            // Log when partial results arrive
+            // Log when partial results arrive - use a ref to track logged items
             if (update.partialResult.teacherReviews?.length) {
               const lastReview = update.partialResult.teacherReviews[update.partialResult.teacherReviews.length - 1];
-              addWorkflowLog(projectId, 'success', `${lastReview.role} Teacher 审查完成`, `${lastReview.role} Teacher`);
+              const logKey = `teacher-${lastReview.role}-${update.partialResult.teacherReviews.length}`;
+              if (!loggedItemsRef.current.has(logKey)) {
+                loggedItemsRef.current.add(logKey);
+                addWorkflowLog(projectId, 'success', `${lastReview.role} Teacher 审查完成`, `${lastReview.role} Teacher`);
+              }
             }
             if (update.partialResult.chairFindings?.length) {
               const lastFinding = update.partialResult.chairFindings[update.partialResult.chairFindings.length - 1];
-              addWorkflowLog(projectId, 'success', `${lastFinding.role} Chair 评估完成`, `${lastFinding.role} Chair`);
+              const logKey = `chair-${lastFinding.role}-${update.partialResult.chairFindings.length}`;
+              if (!loggedItemsRef.current.has(logKey)) {
+                loggedItemsRef.current.add(logKey);
+                addWorkflowLog(projectId, 'success', `${lastFinding.role} Chair 评估完成`, `${lastFinding.role} Chair`);
+              }
             }
           }
         },
@@ -638,15 +672,25 @@ export default function App() {
       addToast("Refinement failed", "error");
     } finally {
       pendingAutoRef.current = false;
+      isRefiningRef.current = false;  // Release the lock
     }
   };
 
   // Callbacks for Automation
+  const autoTriggerPendingRef = useRef(false);  // Prevent duplicate auto-trigger calls
+  
   const handleAutoRefinementTrigger = async (renderedImageBase64: string) => {
     if (runMode === 'simple') return;
     
     if (!currentConfig?.apiKey) return;
     if (!autoRefineEnabled || !isFirstPass || !selectedImage || !result || loopBudgetRef.current <= 0) return;
+    
+    // Prevent duplicate triggers
+    if (autoTriggerPendingRef.current) {
+      console.log('[handleAutoRefinementTrigger] Skipped - already pending');
+      return;
+    }
+    autoTriggerPendingRef.current = true;
     
     setIsFirstPass(false); 
     setIsCapturing(true); 
@@ -662,6 +706,7 @@ export default function App() {
           await handleRefine('image', renderedImageBase64, 'image/png');
         } finally {
           setIsCapturing(false);
+          autoTriggerPendingRef.current = false;  // Release after refinement completes
         }
     }, 800);
   };
@@ -685,18 +730,151 @@ export default function App() {
     }
   };
 
-  const handleCrashRecoveryOnce = async (errorText: string) => {
+  // Quick fix for runtime errors - uses simplified prompt without full teacher review
+  const errorFixCountRef = useRef(0);
+  const MAX_ERROR_FIX_ATTEMPTS = 3;
+  
+  const handleQuickErrorFix = async (errorText: string) => {
     if (!selectedImage || !result) return;
     if (!currentConfig?.apiKey) return;
-    if (crashRecoveryUsedRef.current) return;
-    crashRecoveryUsedRef.current = true;
+    if (!activeProjectId) return;
+    
+    // Limit error fix attempts to avoid infinite loops
+    if (errorFixCountRef.current >= MAX_ERROR_FIX_ATTEMPTS) {
+      addWorkflowLog(activeProjectId, 'error', `已达到最大错误修复次数 (${MAX_ERROR_FIX_ATTEMPTS})，请手动检查代码`);
+      return;
+    }
+    
+    errorFixCountRef.current += 1;
     setIsCapturing(true);
     pendingAutoRef.current = true;
+    
+    addWorkflowLog(activeProjectId, 'agent', `检测到运行时错误，正在自动修复 (${errorFixCountRef.current}/${MAX_ERROR_FIX_ATTEMPTS})...`, 'Student');
+    addWorkflowLog(activeProjectId, 'warning', '错误信息', undefined, errorText.slice(0, 300));
+    
     try {
-      await handleRefine('error', errorText);
+      updateActiveProject({ 
+        status: AnalysisStatus.REFINING,
+        renderError: '',
+        renderLogs: '' 
+      });
+      
+      const fixResult = await quickFixError(
+        {
+          apiKey: currentConfig.apiKey,
+          baseUrl: currentConfig.baseUrl || undefined,
+          modelId: currentConfig.modelId || 'gemini-2.0-flash',
+        },
+        selectedImage.base64,
+        selectedImage.mimeType,
+        currentPythonCode,
+        errorText,
+        (update) => {
+          if (update.status) {
+            updateActiveProject({ status: update.status });
+          }
+        }
+      );
+      
+      // Save to code history
+      const newVersion: CodeVersion = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        code: extractPythonCode(fixResult.markdown),
+        timestamp: Date.now(),
+        source: 'revision',
+      };
+      
+      updateActiveProject({
+        result: fixResult,
+        status: AnalysisStatus.SUCCESS,
+        codeHistory: [...(activeProject?.codeHistory || []), newVersion],
+        renderError: '',
+        renderLogs: '',
+      });
+      
+      addWorkflowLog(activeProjectId, 'success', '错误已自动修复，正在重新渲染...', 'Student');
+      
+    } catch (e: any) {
+      addWorkflowLog(activeProjectId, 'error', `自动修复失败: ${e.message || '未知错误'}`);
+      updateActiveProject({ status: AnalysisStatus.SUCCESS });
     } finally {
       setIsCapturing(false);
+      setIsManualFixing(false);
     }
+  };
+
+  // Manual fix - user provides error description
+  const [isManualFixing, setIsManualFixing] = useState(false);
+  
+  const handleManualFix = async (errorDescription: string) => {
+    if (!selectedImage || !result) {
+      addToast("请先上传图片并生成代码", "error");
+      return;
+    }
+    if (!currentConfig?.apiKey) {
+      addToast("请先配置API Key", "error");
+      return;
+    }
+    if (!activeProjectId) return;
+    
+    setIsManualFixing(true);
+    addWorkflowLog(activeProjectId, 'agent', '收到手动修复请求...', 'Student');
+    addWorkflowLog(activeProjectId, 'info', '问题描述', undefined, errorDescription.slice(0, 300));
+    
+    // Use the quick fix function with the user-provided description
+    try {
+      updateActiveProject({ 
+        status: AnalysisStatus.REFINING,
+        renderError: '',
+        renderLogs: '' 
+      });
+      
+      const fixResult = await quickFixError(
+        {
+          apiKey: currentConfig.apiKey,
+          baseUrl: currentConfig.baseUrl || undefined,
+          modelId: currentConfig.modelId || 'gemini-2.0-flash',
+        },
+        selectedImage.base64,
+        selectedImage.mimeType,
+        currentPythonCode,
+        errorDescription,
+        (update) => {
+          if (update.status) {
+            updateActiveProject({ status: update.status });
+          }
+        }
+      );
+      
+      // Save to code history
+      const newVersion: CodeVersion = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        code: extractPythonCode(fixResult.markdown),
+        timestamp: Date.now(),
+        source: 'revision',
+      };
+      
+      updateActiveProject({
+        result: fixResult,
+        status: AnalysisStatus.SUCCESS,
+        codeHistory: [...(activeProject?.codeHistory || []), newVersion],
+        renderError: '',
+        renderLogs: '',
+      });
+      
+      addWorkflowLog(activeProjectId, 'success', '手动修复完成，正在重新渲染...', 'Student');
+      
+    } catch (e: any) {
+      addWorkflowLog(activeProjectId, 'error', `手动修复失败: ${e.message || '未知错误'}`);
+      updateActiveProject({ status: AnalysisStatus.SUCCESS });
+    } finally {
+      setIsManualFixing(false);
+    }
+  };
+
+  // Reset error fix counter when starting a new analysis
+  const resetErrorFixCounter = () => {
+    errorFixCountRef.current = 0;
   };
 
   // --- Resizing Logic ---
@@ -739,11 +917,16 @@ export default function App() {
 
   const isWorkflowBusy = status === AnalysisStatus.ANALYZING || status === AnalysisStatus.REFINING || isCapturing;
 
+  // Helper to extract python code from markdown
+  const extractPythonCode = (markdown: string): string => {
+    if (!markdown) return '';
+    const match = markdown.match(/```python([\s\S]*?)```/i);
+    return match ? match[1].trim() : (markdown.includes('import matplotlib') ? markdown : '');
+  };
+
   // Extract python code for OutputPanel
   const currentPythonCode = React.useMemo(() => {
-    if (!result?.markdown) return '';
-    const match = result.markdown.match(/```python([\s\S]*?)```/i);
-    return match ? match[1].trim() : (result.markdown.includes('import matplotlib') ? result.markdown : '');
+    return extractPythonCode(result?.markdown || '');
   }, [result]);
 
   return (
@@ -877,10 +1060,20 @@ export default function App() {
                     renderError={renderError}
                     setRenderError={setRenderError}
                     onPlotRendered={(base64, svgBase64) => {
+                      // Prevent duplicate callbacks for the same render
+                      const hash = base64.slice(-100);  // Use last 100 chars as simple hash
+                      if (hash === lastRenderedHashRef.current) {
+                        console.log('[onPlotRendered] Skipped - duplicate render');
+                        return;
+                      }
+                      lastRenderedHashRef.current = hash;
+                      
                       // Save rendered image to the latest code version
                       if (activeProjectId) {
                         saveRenderedImageToHistory(activeProjectId, base64, svgBase64);
                       }
+                      // Reset error fix counter on successful render
+                      errorFixCountRef.current = 0;
                       if (runMode !== 'simple') handleAutoRefinementTrigger(base64);
                     }}
                     onPlotRuntimeError={(errorText) => {
@@ -888,7 +1081,8 @@ export default function App() {
                         handleAutoRefinementErrorTrigger(errorText);
                         return;
                       }
-                      handleCrashRecoveryOnce(errorText);
+                      // In simple mode, use quick error fix
+                      handleQuickErrorFix(errorText);
                     }}
                     pythonCode={currentPythonCode}
                     selectedImage={selectedImage}
@@ -927,7 +1121,10 @@ export default function App() {
                   workflowLogs={workflowLogs}
                   onShowToast={addToast}
                   codeHistory={projects.find(p => p.id === activeProjectId)?.codeHistory || []}
+                  plotHistory={plotHistory}
                   projectName={activeProject?.name || 'plot'}
+                  onManualFix={handleManualFix}
+                  isFixing={isManualFixing}
                 />
              </div>
 

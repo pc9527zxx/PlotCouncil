@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { AnalysisResult, AnalysisStatus, CodeVersion, WorkflowLogEntry } from '../types';
-import { Terminal, Layers, Copy, FileJson, Bug, Gavel, Download, Loader2, Clock, CheckCircle, AlertCircle, AlertTriangle, Bot } from 'lucide-react';
+import { AnalysisResult, AnalysisStatus, CodeVersion, WorkflowLogEntry, PlotSnapshot } from '../types';
+import { Terminal, Layers, Copy, FileJson, Bug, Gavel, Download, Loader2, Clock, CheckCircle, AlertCircle, AlertTriangle, Bot, Wrench, Send, Image as ImageIcon } from 'lucide-react';
 import { ToastType } from './Toast';
 import { CodeDiff } from './CodeDiff';
 
@@ -12,7 +12,10 @@ interface AnalysisViewProps {
   workflowLogs?: WorkflowLogEntry[];
   onShowToast: (msg: string, type: ToastType) => void;
   codeHistory?: CodeVersion[];
+  plotHistory?: PlotSnapshot[];
   projectName?: string;
+  onManualFix?: (errorDescription: string) => void;
+  isFixing?: boolean;
 }
 
 type TabType = 'code' | 'review' | 'logs';
@@ -25,9 +28,13 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
   workflowLogs = [],
   onShowToast,
   codeHistory = [],
-  projectName = 'plot'
+  plotHistory = [],
+  projectName = 'plot',
+  onManualFix,
+  isFixing = false,
 }) => {
   const [pythonCode, setPythonCode] = useState<string>('');
+  const [manualErrorInput, setManualErrorInput] = useState<string>('');
   const [activeTab, setActiveTab] = useState<TabType>('code');
   const [chairRawOpen, setChairRawOpen] = useState<Record<number, boolean>>({});
   const [teacherRawOpen, setTeacherRawOpen] = useState<Record<number, boolean>>({});
@@ -313,6 +320,54 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
                            }
                         </pre>
                      </div>
+                   </div>
+                 </div>
+               )}
+
+               {/* Plot History Section */}
+               {plotHistory.length > 0 && !showDiff && (
+                 <div className="border-t border-slate-200 dark:border-zinc-800 p-3 bg-slate-50/50 dark:bg-zinc-900/50">
+                   <div className="flex items-center gap-2 mb-2">
+                     <ImageIcon className="w-3.5 h-3.5 text-slate-400" />
+                     <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase">图片历史 ({plotHistory.length})</span>
+                   </div>
+                   <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                     {plotHistory.map((snapshot, idx) => {
+                       const time = new Date(snapshot.created).toLocaleTimeString('zh-CN', {
+                         hour: '2-digit',
+                         minute: '2-digit',
+                         second: '2-digit',
+                       });
+                       return (
+                         <div key={snapshot.id} className="flex-none group relative">
+                           <div className="w-24 h-24 rounded border border-slate-200 dark:border-zinc-700 overflow-hidden bg-white dark:bg-zinc-800">
+                             <img
+                               src={`data:image/png;base64,${snapshot.base64}`}
+                               alt={`Render v${idx + 1}`}
+                               className="w-full h-full object-contain"
+                             />
+                           </div>
+                           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity rounded flex flex-col items-center justify-center gap-1">
+                             <span className="text-[9px] text-white/80">v{idx + 1}</span>
+                             <span className="text-[8px] text-white/60">{time}</span>
+                             <button
+                               onClick={() => {
+                                 const link = document.createElement('a');
+                                 link.href = `data:image/png;base64,${snapshot.base64}`;
+                                 const safeName = projectName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').slice(0, 30);
+                                 link.download = `${safeName}_v${idx + 1}.png`;
+                                 link.click();
+                                 onShowToast(`图片 v${idx + 1} 已下载`, 'success');
+                               }}
+                               className="mt-1 p-1 rounded bg-white/20 hover:bg-white/30 transition-colors"
+                               title="下载此版本"
+                             >
+                               <Download className="w-3 h-3 text-white" />
+                             </button>
+                           </div>
+                         </div>
+                       );
+                     })}
                    </div>
                  </div>
                )}
@@ -793,6 +848,58 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
                     <pre className="text-[10px] text-rose-800 dark:text-rose-300 font-mono whitespace-pre-wrap break-all">
                       {renderError}
                     </pre>
+                 </div>
+               )}
+
+               {/* Manual Fix Section */}
+               {onManualFix && (
+                 <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-3">
+                    <h4 className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase mb-2 flex items-center gap-1">
+                      <Wrench className="w-3 h-3" /> 手动修复
+                    </h4>
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mb-2">
+                      描述代码问题或粘贴错误信息，让AI自动修复
+                    </p>
+                    <textarea
+                      value={manualErrorInput}
+                      onChange={(e) => setManualErrorInput(e.target.value)}
+                      placeholder="例如：图表标题字体太大，或粘贴错误信息..."
+                      className="w-full h-20 text-xs p-2 border border-amber-200 dark:border-amber-800 rounded bg-white dark:bg-zinc-900 text-slate-700 dark:text-slate-300 placeholder-slate-400 dark:placeholder-slate-500 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400"
+                      disabled={isFixing}
+                    />
+                    <div className="flex justify-end mt-2 gap-2">
+                      {renderError && (
+                        <button
+                          onClick={() => setManualErrorInput(renderError)}
+                          className="text-[10px] px-2 py-1 rounded bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 hover:bg-rose-200 dark:hover:bg-rose-900/50"
+                          disabled={isFixing}
+                        >
+                          使用运行时错误
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          if (manualErrorInput.trim()) {
+                            onManualFix(manualErrorInput.trim());
+                            setManualErrorInput('');
+                          }
+                        }}
+                        disabled={!manualErrorInput.trim() || isFixing}
+                        className="flex items-center gap-1 text-[10px] px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isFixing ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            修复中...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3 h-3" />
+                            发送修复请求
+                          </>
+                        )}
+                      </button>
+                    </div>
                  </div>
                )}
                

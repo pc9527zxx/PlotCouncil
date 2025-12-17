@@ -46,6 +46,8 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
   const [status, setStatus] = useState<RenderStatus>("idle");
   const [imageBase64, setImageBase64] = useState<string | null>(initialImageBase64);
   const [svgBase64, setSvgBase64] = useState<string | null>(initialSvgBase64);
+  const isRenderingRef = React.useRef(false);  // Prevent duplicate renders
+  const lastCodeRef = React.useRef<string>("");  // Track last rendered code
 
   // Notify parent of status changes
   useEffect(() => {
@@ -61,6 +63,21 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
 
   const runBackendRender = async () => {
     if (!code.trim()) return;
+    
+    // Prevent duplicate renders
+    if (isRenderingRef.current) {
+      console.log('[PyodidePlot] Skipped - already rendering');
+      return;
+    }
+    
+    // Skip if code hasn't changed (unless it's a manual refresh)
+    if (code === lastCodeRef.current && refreshTrigger === 0) {
+      console.log('[PyodidePlot] Skipped - same code');
+      return;
+    }
+    
+    isRenderingRef.current = true;
+    lastCodeRef.current = code;
     setStatus("running");
 
     // 3 minute timeout for rendering
@@ -129,6 +146,8 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
       }
       setStatus("error");
       onRuntimeError?.(message, "");
+    } finally {
+      isRenderingRef.current = false;  // Release the lock
     }
   };
 
