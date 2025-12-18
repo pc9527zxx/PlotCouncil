@@ -201,10 +201,42 @@ export const AnalysisView: React.FC<AnalysisViewProps> = memo(({
     }
   }, [result]);
 
-  const copyText = (text: string, label: string) => {
+  const copyText = async (text: string, label: string) => {
     if (!text) return;
-    navigator.clipboard.writeText(text);
-    onShowToast(`${label} copied to clipboard`, "success");
+    
+    // Try modern clipboard API first
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        onShowToast(`${label} copied to clipboard`, "success");
+        return;
+      } catch (err) {
+        // Fall through to legacy method
+      }
+    }
+    
+    // Fallback: use textarea + execCommand (works without permissions)
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    textArea.style.top = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    
+    try {
+      const success = document.execCommand('copy');
+      if (success) {
+        onShowToast(`${label} copied to clipboard`, "success");
+      } else {
+        onShowToast(`Failed to copy ${label}`, "error");
+      }
+    } catch (err) {
+      onShowToast(`Failed to copy ${label}`, "error");
+    } finally {
+      document.body.removeChild(textArea);
+    }
   };
 
   const copyCode = () => {

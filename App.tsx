@@ -1112,7 +1112,10 @@ export default function App() {
 
   return (
     // FIX 1: h-screen and overflow-hidden on root
-    <div className={`h-screen w-screen overflow-hidden font-sans flex ${darkMode ? 'dark bg-zinc-950 text-slate-200' : 'bg-slate-50 text-slate-900'}`}>
+    <div 
+      className={`h-screen w-screen overflow-hidden font-sans flex ${darkMode ? 'dark bg-zinc-950 text-slate-200' : 'bg-slate-50 text-slate-900'}`}
+      style={{ contain: 'layout' }}
+    >
       
       {/* Toast Layer */}
       <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 pointer-events-none">
@@ -1195,7 +1198,7 @@ export default function App() {
       />
 
       {/* 2. Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 h-full">
+      <main className="flex-1 flex flex-col min-w-0 h-full transform-gpu" style={{ contain: 'strict' }}>
         
         {projects.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-slate-400 dark:text-slate-500">

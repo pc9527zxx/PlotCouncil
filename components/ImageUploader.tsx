@@ -74,25 +74,57 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageSelected, s
     try {
       const res = await fetch(selectedImage.previewUrl);
       const blob = await res.blob();
+      
+      // Check if clipboard API is available in secure context
+      if (!navigator.clipboard || !window.isSecureContext) {
+        // Fallback: copy base64 data URL as text
+        await copyTextFallback(selectedImage.previewUrl);
+        setCopyState('ok');
+        if (onShowToast) onShowToast('Image copied as data URL (use HTTPS for native copy)', 'success');
+        setTimeout(() => setCopyState('idle'), 1500);
+        return;
+      }
+      
       // Prefer ClipboardItem if available for image MIME
       if ((window as any).ClipboardItem) {
-        const item = new (window as any).ClipboardItem({ [blob.type]: blob });
-        await navigator.clipboard.write([item]);
-      } else {
-        // Fallback: copy data URL as text (less ideal but better than nothing)
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          const txt = ev.target?.result as string;
-          await navigator.clipboard.writeText(txt);
-        };
-        reader.readAsDataURL(blob);
+        try {
+          const item = new (window as any).ClipboardItem({ [blob.type]: blob });
+          await navigator.clipboard.write([item]);
+          setCopyState('ok');
+          setTimeout(() => setCopyState('idle'), 1500);
+          return;
+        } catch (err) {
+          // ClipboardItem failed, try text fallback
+        }
       }
+      
+      // Fallback: copy data URL as text
+      await copyTextFallback(selectedImage.previewUrl);
       setCopyState('ok');
       setTimeout(() => setCopyState('idle'), 1500);
     } catch (err) {
       console.error('Copy image failed', err);
       setCopyState('error');
+      if (onShowToast) onShowToast('Failed to copy image', 'error');
       setTimeout(() => setCopyState('idle'), 1500);
+    }
+  };
+
+  // Fallback copy using textarea (works without clipboard permissions)
+  const copyTextFallback = async (text: string): Promise<boolean> => {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    textArea.style.top = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      const success = document.execCommand('copy');
+      return success;
+    } finally {
+      document.body.removeChild(textArea);
     }
   };
 

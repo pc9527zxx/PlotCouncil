@@ -183,14 +183,14 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
   }
 
   if (status === "error") {
+    // Error state - show a subtle indicator, details are in Logs tab
     return (
       <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
-         <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mb-3">
-            <AlertCircle className="w-6 h-6 text-rose-500" />
+         <div className="w-10 h-10 bg-rose-50 dark:bg-rose-900/20 rounded-full flex items-center justify-center mb-2">
+            <AlertCircle className="w-5 h-5 text-rose-400" />
          </div>
-         <h3 className="text-sm font-bold text-slate-700">Rendering Failed</h3>
-         <p className="text-xs text-slate-500 mt-1 max-w-xs">
-           Check the "Logs" tab in the right panel for traceback details.
+         <p className="text-xs text-slate-400 dark:text-slate-500">
+           查看右侧 Logs 面板获取详情
          </p>
       </div>
     );

@@ -403,15 +403,15 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = memo(({
   };
 
   return (
-    <div 
-      style={{ width: collapsed ? 64 : 300, willChange: 'width, transform', contain: 'layout paint' }}
-      className="h-full bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex flex-col border-r border-slate-200 dark:border-slate-800 flex-shrink-0 z-40 transition-[width] duration-150 ease-out"
+    <aside 
+      style={{ width: collapsed ? 64 : 300 }}
+      className="h-full bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex flex-col border-r border-slate-200 dark:border-slate-800 flex-shrink-0 z-40 transform-gpu"
     >
       {/* 1. Unified App Header (Logo + Controls) */}
       <div 
         className={`
           ${collapsed ? 'flex flex-col items-center py-4 gap-4 h-auto' : 'grid grid-cols-[auto,1fr,auto] items-center h-12 px-3'}
-          shrink-0 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-zinc-900/50 transition-[height,padding] duration-150
+          shrink-0 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-zinc-900/50
         `}
       >
          {!collapsed ? (
@@ -618,7 +618,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = memo(({
 
       {/* 4. Project List */}
        <div className="flex-1 overflow-y-auto px-2 custom-scrollbar space-y-0.5 py-2 transform-gpu"
-         style={{ willChange: 'transform', contain: 'paint' }}>
+         style={{ contain: 'strict', contentVisibility: 'auto' }}>
         {/* Render groups first */}
         {!collapsed && groups.map((group) => {
           const groupProjects = groupedProjects.get(group.id) || [];
@@ -795,7 +795,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = memo(({
           )}
         </div>
       )}
-    </div>
+    </aside>
   );
 });
 
