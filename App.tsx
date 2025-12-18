@@ -857,36 +857,84 @@ export default function App() {
     }, 800);
   };
 
+  // Quick fix for runtime errors - uses simplified prompt without full teacher review
+  const errorFixCountRef = useRef(0);
+  const MAX_ERROR_FIX_ATTEMPTS = 3;
+
   const handleAutoRefinementErrorTrigger = async (errorText: string) => {
     if (runModeRef.current === 'simple') return;  // 使用 ref
 
     if (!currentConfig?.apiKey) return;
+    if (!selectedImage || !result || !activeProjectId) return;
     
-    // 使用 refs 获取最新值
-    if (!autoRefineEnabledRef.current || !isFirstPassRef.current || loopBudgetRef.current <= 0) {
-      console.log('[handleAutoRefinementErrorTrigger] Skipped - conditions not met');
+    // Limit error fix attempts to avoid infinite loops
+    if (errorFixCountRef.current >= MAX_ERROR_FIX_ATTEMPTS) {
+      addWorkflowLog(activeProjectId, 'error', `已达到最大错误修复次数 (${MAX_ERROR_FIX_ATTEMPTS})，请手动检查代码`);
+      // Still allow entering teacher review for manual guidance
       return;
     }
     
-    setIsFirstPass(false);
-    isFirstPassRef.current = false;  // 同步更新 ref
+    errorFixCountRef.current += 1;
     setIsCapturing(true);
-    pendingAutoRef.current = true;
-    updateLoopBudget(prev => Math.max(prev - 1, 0));
-    if (activeProjectId) {
-      addWorkflowLog(activeProjectId, 'warning', `渲染出错，进入错误诊断模式`, undefined, errorText.slice(0, 200));
-    }
+    
+    addWorkflowLog(activeProjectId, 'agent', `渲染出错，Student 自动修复中 (${errorFixCountRef.current}/${MAX_ERROR_FIX_ATTEMPTS})...`, 'Student');
+    addWorkflowLog(activeProjectId, 'warning', '错误信息', undefined, errorText.slice(0, 300));
+    
     try {
-      await handleRefine('error', errorText);
+      updateActiveProject({ 
+        status: AnalysisStatus.REFINING,
+        renderError: '',
+        renderLogs: '' 
+      });
+      
+      const fixResult = await quickFixError(
+        {
+          apiKey: currentConfig.apiKey,
+          baseUrl: currentConfig.baseUrl || undefined,
+          modelId: currentConfig.modelId || 'gemini-2.0-flash',
+        },
+        selectedImage.base64,
+        selectedImage.mimeType,
+        currentPythonCode,
+        errorText,
+        (update) => {
+          if (update.status) {
+            updateActiveProject({ status: update.status });
+          }
+        }
+      );
+      
+      // Save to code history
+      const newVersion: CodeVersion = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        code: extractPythonCode(fixResult.markdown),
+        timestamp: Date.now(),
+        source: 'revision',
+      };
+      
+      // Update project - this will trigger PyodidePlot to re-render
+      // If re-render succeeds, handleAutoRefinementTrigger will be called
+      // If re-render fails again, this function will be called again (up to MAX_ERROR_FIX_ATTEMPTS)
+      updateActiveProject({
+        result: fixResult,
+        status: AnalysisStatus.SUCCESS,
+        codeHistory: [...(activeProject?.codeHistory || []), newVersion],
+        renderError: '',
+        renderLogs: '',
+        generatedPlotBase64: null,  // Clear to trigger re-render
+        generatedSvgBase64: null,
+      });
+      
+      addWorkflowLog(activeProjectId, 'success', '错误已修复，正在重新渲染...', 'Student');
+      
+    } catch (e: any) {
+      addWorkflowLog(activeProjectId, 'error', `自动修复失败: ${e.message || '未知错误'}`);
+      updateActiveProject({ status: AnalysisStatus.SUCCESS });
     } finally {
       setIsCapturing(false);
     }
   };
 
-  // Quick fix for runtime errors - uses simplified prompt without full teacher review
-  const errorFixCountRef = useRef(0);
-  const MAX_ERROR_FIX_ATTEMPTS = 3;
-  
   const handleQuickErrorFix = async (errorText: string) => {
     if (!selectedImage || !result) return;
     if (!currentConfig?.apiKey) return;

@@ -185,12 +185,8 @@ export const AnalysisView: React.FC<AnalysisViewProps> = memo(({
     AnalysisStatus.REFINING,
   ].includes(status);
 
-  // Auto-switch tabs based on status
-  useEffect(() => {
-    if (status.includes('TEACHER') || status.includes('CHAIR')) setActiveTab('review');
-    if (renderError) setActiveTab('logs');
-    if (status === AnalysisStatus.SUCCESS && !renderError) setActiveTab('code');
-  }, [status, renderError]);
+  // Note: Removed auto-tab switching - let users control their view
+  // Tabs will stay on whatever the user selected
 
   // Parse code from result
   useEffect(() => {

@@ -1,8 +1,52 @@
 import React, { useState, memo, useCallback } from 'react';
 import { AnalysisStatus, PlotImage, PlotSnapshot } from '../types';
-import { Download, ZoomIn, ZoomOut, Maximize2, Eye, EyeOff, Loader2, Terminal, Layers, Gavel, CheckCircle2, ArrowRight, Image as ImageIcon, RefreshCw, FileImage, FileCode, History } from 'lucide-react';
+import { Download, ZoomIn, ZoomOut, Maximize2, Eye, EyeOff, Loader2, Terminal, Layers, Gavel, CheckCircle2, CheckCircle, ArrowRight, Image as ImageIcon, RefreshCw, FileImage, FileCode, History } from 'lucide-react';
 import { PyodidePlot } from './PyodidePlot';
 import { ToastType } from './Toast';
+
+// Agent Step Component for the workflow pipeline
+const AgentStep: React.FC<{
+  name: string;
+  icon: React.ReactNode;
+  isActive: boolean;
+  isComplete: boolean;
+  colorClass: 'indigo' | 'amber' | 'orange' | 'yellow' | 'purple' | 'violet';
+}> = ({ name, icon, isActive, isComplete, colorClass }) => {
+  const colorMap = {
+    indigo: { bg: 'bg-indigo-50 dark:bg-indigo-900/30', text: 'text-indigo-700 dark:text-indigo-300', border: 'border-indigo-200 dark:border-indigo-700' },
+    amber: { bg: 'bg-amber-50 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-300', border: 'border-amber-200 dark:border-amber-700' },
+    orange: { bg: 'bg-orange-50 dark:bg-orange-900/30', text: 'text-orange-700 dark:text-orange-300', border: 'border-orange-200 dark:border-orange-700' },
+    yellow: { bg: 'bg-yellow-50 dark:bg-yellow-900/30', text: 'text-yellow-700 dark:text-yellow-300', border: 'border-yellow-200 dark:border-yellow-700' },
+    purple: { bg: 'bg-purple-50 dark:bg-purple-900/30', text: 'text-purple-700 dark:text-purple-300', border: 'border-purple-200 dark:border-purple-700' },
+    violet: { bg: 'bg-violet-50 dark:bg-violet-900/30', text: 'text-violet-700 dark:text-violet-300', border: 'border-violet-200 dark:border-violet-700' },
+  };
+  const colors = colorMap[colorClass];
+  
+  if (isActive) {
+    return (
+      <div className={`flex items-center gap-1 px-2 py-1 rounded-md font-bold border ${colors.bg} ${colors.text} ${colors.border}`}>
+        <Loader2 className="w-3 h-3 animate-spin" />
+        <span className="whitespace-nowrap">{name}</span>
+      </div>
+    );
+  }
+  
+  if (isComplete) {
+    return (
+      <div className={`flex items-center gap-1 px-2 py-1 rounded-md ${colors.bg} ${colors.text} opacity-70`}>
+        <CheckCircle className="w-3 h-3" />
+        <span className="whitespace-nowrap">{name}</span>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="flex items-center gap-1 px-2 py-1 rounded-md text-slate-400 dark:text-slate-600">
+      {icon}
+      <span className="whitespace-nowrap">{name}</span>
+    </div>
+  );
+};
 
 interface OutputPanelProps {
   status: AnalysisStatus;
@@ -298,27 +342,72 @@ export const OutputPanel: React.FC<OutputPanelProps> = memo(({
         </div>
       </div>
 
-      {/* 3. Footer: Workflow Status */}
-      <div className="h-9 bg-white dark:bg-zinc-900 border-t border-slate-200 dark:border-zinc-800 flex items-center px-4 gap-3 text-[10px] select-none shrink-0 z-30 overflow-x-auto no-scrollbar">
-         <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors ${isGen ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-100' : 'text-slate-400'}`}>
-            {isGen ? <Loader2 className="w-3 h-3 animate-spin" /> : <Terminal className="w-3 h-3" />}
-            <span>Generator</span>
-         </div>
-         <ArrowRight className="w-3 h-3 text-slate-200 dark:text-zinc-700" />
-         <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors ${isReview ? 'bg-amber-50 text-amber-700 font-bold border border-amber-100' : 'text-slate-400'}`}>
-            <Layers className="w-3 h-3" />
-            <span>Review</span>
-         </div>
-         <ArrowRight className="w-3 h-3 text-slate-200 dark:text-zinc-700" />
-         <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors ${isChair ? 'bg-purple-50 text-purple-700 font-bold border border-purple-100' : 'text-slate-400'}`}>
-            <Gavel className="w-3 h-3" />
-            <span>Chair</span>
-         </div>
+      {/* 3. Footer: Workflow Status - Six Agent Pipeline */}
+      <div className="h-9 bg-white dark:bg-zinc-900 border-t border-slate-200 dark:border-zinc-800 flex items-center px-3 gap-1 text-[10px] select-none shrink-0 z-30 overflow-x-auto no-scrollbar">
+         {/* Student (Generator) */}
+         <AgentStep 
+           name="Student" 
+           icon={<Terminal className="w-3 h-3" />}
+           isActive={status === AnalysisStatus.ANALYZING || status === AnalysisStatus.REFINING}
+           isComplete={!([AnalysisStatus.IDLE, AnalysisStatus.ANALYZING].includes(status))}
+           colorClass="indigo"
+         />
+         <ArrowRight className="w-2.5 h-2.5 text-slate-200 dark:text-zinc-700 shrink-0" />
+         
+         {/* Dr.Style */}
+         <AgentStep 
+           name="Dr.Style" 
+           icon={<Layers className="w-3 h-3" />}
+           isActive={status === AnalysisStatus.TEACHER_STYLE_REVIEW}
+           isComplete={[AnalysisStatus.TEACHER_LAYOUT_REVIEW, AnalysisStatus.TEACHER_DATA_REVIEW, AnalysisStatus.CHAIR_QA, AnalysisStatus.CHAIR_STRATEGY, AnalysisStatus.SUCCESS, AnalysisStatus.REFINING].includes(status)}
+           colorClass="amber"
+         />
+         <ArrowRight className="w-2.5 h-2.5 text-slate-200 dark:text-zinc-700 shrink-0" />
+         
+         {/* Dr.Layout */}
+         <AgentStep 
+           name="Dr.Layout" 
+           icon={<Layers className="w-3 h-3" />}
+           isActive={status === AnalysisStatus.TEACHER_LAYOUT_REVIEW}
+           isComplete={[AnalysisStatus.TEACHER_DATA_REVIEW, AnalysisStatus.CHAIR_QA, AnalysisStatus.CHAIR_STRATEGY, AnalysisStatus.SUCCESS, AnalysisStatus.REFINING].includes(status)}
+           colorClass="orange"
+         />
+         <ArrowRight className="w-2.5 h-2.5 text-slate-200 dark:text-zinc-700 shrink-0" />
+         
+         {/* Dr.Data */}
+         <AgentStep 
+           name="Dr.Data" 
+           icon={<Layers className="w-3 h-3" />}
+           isActive={status === AnalysisStatus.TEACHER_DATA_REVIEW}
+           isComplete={[AnalysisStatus.CHAIR_QA, AnalysisStatus.CHAIR_STRATEGY, AnalysisStatus.SUCCESS, AnalysisStatus.REFINING].includes(status)}
+           colorClass="yellow"
+         />
+         <ArrowRight className="w-2.5 h-2.5 text-slate-200 dark:text-zinc-700 shrink-0" />
+         
+         {/* Chair QA */}
+         <AgentStep 
+           name="Chair QA" 
+           icon={<Gavel className="w-3 h-3" />}
+           isActive={status === AnalysisStatus.CHAIR_QA}
+           isComplete={[AnalysisStatus.CHAIR_STRATEGY, AnalysisStatus.SUCCESS, AnalysisStatus.REFINING].includes(status)}
+           colorClass="purple"
+         />
+         <ArrowRight className="w-2.5 h-2.5 text-slate-200 dark:text-zinc-700 shrink-0" />
+         
+         {/* Chair Strategy */}
+         <AgentStep 
+           name="Chair Strategy" 
+           icon={<Gavel className="w-3 h-3" />}
+           isActive={status === AnalysisStatus.CHAIR_STRATEGY}
+           isComplete={status === AnalysisStatus.SUCCESS}
+           colorClass="violet"
+         />
+         
          <div className="flex-1" />
          {isDone && (
-            <div className="flex items-center gap-1.5 text-emerald-600 font-bold px-3 py-0.5 bg-emerald-50 rounded-full border border-emerald-100">
+            <div className="flex items-center gap-1.5 text-emerald-600 font-bold px-3 py-0.5 bg-emerald-50 dark:bg-emerald-900/30 rounded-full border border-emerald-100 dark:border-emerald-800">
                <CheckCircle2 className="w-3.5 h-3.5" />
-               <span>Success</span>
+               <span>Done</span>
             </div>
          )}
       </div>

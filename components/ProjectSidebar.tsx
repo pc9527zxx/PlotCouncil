@@ -402,16 +402,26 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = memo(({
     );
   };
 
+  // Use fixed width + negative margin for GPU-accelerated animation
+  // This avoids layout thrashing compared to animating width directly
+  const sidebarWidth = 300;
+  const collapsedWidth = 64;
+  const translateX = collapsed ? -(sidebarWidth - collapsedWidth) : 0;
+
   return (
     <aside 
-      style={{ width: collapsed ? 64 : 300 }}
-      className="h-full bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex flex-col border-r border-slate-200 dark:border-slate-800 flex-shrink-0 z-40 transform-gpu"
+      style={{ 
+        width: sidebarWidth,
+        transform: `translateX(${translateX}px)`,
+        marginRight: collapsed ? -(sidebarWidth - collapsedWidth) : 0,
+      }}
+      className="h-full bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-300 flex flex-col border-r border-slate-200 dark:border-slate-800 flex-shrink-0 z-40 transform-gpu transition-[transform,margin] duration-200 ease-out will-change-transform"
     >
       {/* 1. Unified App Header (Logo + Controls) */}
       <div 
         className={`
           ${collapsed ? 'flex flex-col items-center py-4 gap-4 h-auto' : 'grid grid-cols-[auto,1fr,auto] items-center h-12 px-3'}
-          shrink-0 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-zinc-900/50
+          shrink-0 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-zinc-900/50 transition-all duration-200
         `}
       >
          {!collapsed ? (
