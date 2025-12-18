@@ -177,9 +177,18 @@ export interface WorkflowLogEntry {
   details?: string;  // 额外详情
 }
 
+// 项目分组 (类似 Discord 文件夹)
+export interface ProjectGroup {
+  id: string;
+  name: string;
+  collapsed: boolean;  // 是否折叠
+  createdAt: number;
+}
+
 export interface Project {
   id: string;
   name: string;
+  groupId?: string;  // 所属分组ID，undefined 表示未分组
   createdAt: number;
   updatedAt: number;
   selectedImage: PlotImage | null;

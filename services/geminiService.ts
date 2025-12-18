@@ -159,6 +159,22 @@ const callOpenAIDirect = async (
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 min timeout
 
+  // Build request body
+  const requestBody: Record<string, any> = {
+    model: config.modelName,
+    messages,
+    temperature,
+    max_tokens: 16384,
+  };
+  
+  // Special handling for Zenmux auto routing
+  if (baseUrl.includes('zenmux') && config.modelName.includes('auto')) {
+    requestBody.model_routing_config = {
+      strategy: 'cost_optimized',  // or 'quality_optimized', 'balanced'
+      fallback_models: ['gpt-4o-mini', 'claude-3-haiku-20240307']
+    };
+  }
+
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -166,12 +182,7 @@ const callOpenAIDirect = async (
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify({
-        model: config.modelName,
-        messages,
-        temperature,
-        max_tokens: 16384,
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
 

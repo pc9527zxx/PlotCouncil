@@ -54,11 +54,16 @@ export const PyodidePlot: React.FC<BackendPlotProps> = ({
     onStatusChange?.(status);
   }, [status, onStatusChange]);
 
-  // Sync initial props (e.g. switching projects)
+  // Sync initial props (e.g. switching projects or re-running analysis)
   useEffect(() => {
     setImageBase64(initialImageBase64);
     setSvgBase64(initialSvgBase64);
     setStatus(initialError ? "error" : (initialImageBase64 ? "success" : "idle"));
+    
+    // 当 initialImageBase64 被清除时（重新分析），重置 lastCodeRef 以允许重新渲染相同代码
+    if (initialImageBase64 === null) {
+      lastCodeRef.current = "";
+    }
   }, [initialImageBase64, initialSvgBase64, initialError]);
 
   const runBackendRender = async () => {

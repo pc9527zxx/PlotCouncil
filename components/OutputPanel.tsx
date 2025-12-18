@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { AnalysisStatus, PlotImage } from '../types';
-import { Download, ZoomIn, ZoomOut, Maximize2, Eye, EyeOff, Loader2, Terminal, Layers, Gavel, CheckCircle2, ArrowRight, Image as ImageIcon, RefreshCw, FileImage, FileCode } from 'lucide-react';
+import React, { useState, memo, useCallback } from 'react';
+import { AnalysisStatus, PlotImage, PlotSnapshot } from '../types';
+import { Download, ZoomIn, ZoomOut, Maximize2, Eye, EyeOff, Loader2, Terminal, Layers, Gavel, CheckCircle2, ArrowRight, Image as ImageIcon, RefreshCw, FileImage, FileCode, History } from 'lucide-react';
 import { PyodidePlot } from './PyodidePlot';
 import { ToastType } from './Toast';
 
@@ -21,9 +21,10 @@ interface OutputPanelProps {
   onShowToast: (msg: string, type: ToastType) => void;
   projectName?: string;
   codeIteration?: number;
+  plotHistory?: PlotSnapshot[];
 }
 
-export const OutputPanel: React.FC<OutputPanelProps> = ({
+export const OutputPanel: React.FC<OutputPanelProps> = memo(({
   status,
   generatedPlotBase64,
   generatedSvgBase64,
@@ -39,12 +40,14 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
   selectedImage,
   onShowToast,
   projectName = 'plot',
-  codeIteration = 0
+  codeIteration = 0,
+  plotHistory = []
 }) => {
   const [overlayOpacity, setOverlayOpacity] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isRenderRunning, setIsRenderRunning] = useState(false);
+  const [selectedHistoryIndex, setSelectedHistoryIndex] = useState<number | null>(null);  // null = current
 
   // Workflow State Helpers
   const isGen = status === AnalysisStatus.ANALYZING || status === AnalysisStatus.REFINING;
@@ -103,9 +106,41 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
       
       {/* 1. Header */}
       <div className="flex-shrink-0 h-10 flex items-center justify-between px-4 border-b border-slate-100 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-900/50">
-         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
-           <ImageIcon className="w-3.5 h-3.5" /> Generated Output
-         </span>
+         <div className="flex items-center gap-2">
+           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
+             <ImageIcon className="w-3.5 h-3.5" /> Generated Output
+           </span>
+           
+           {/* History Selector - like Code version selector */}
+           {plotHistory.length > 0 && (
+             <>
+               <span className="text-slate-300 dark:text-zinc-600">|</span>
+               <History className="w-3.5 h-3.5 text-slate-400" />
+               <select
+                 value={selectedHistoryIndex ?? ''}
+                 onChange={(e) => {
+                   const val = e.target.value;
+                   setSelectedHistoryIndex(val === '' ? null : parseInt(val));
+                 }}
+                 className="text-[10px] bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded px-2 py-1 text-slate-600 dark:text-slate-300 cursor-pointer min-w-[100px]"
+               >
+                 <option value="">当前图片</option>
+                 {plotHistory.map((snapshot, idx) => {
+                   const time = new Date(snapshot.created).toLocaleTimeString('zh-CN', {
+                     hour: '2-digit',
+                     minute: '2-digit',
+                     second: '2-digit',
+                   });
+                   return (
+                     <option key={snapshot.id} value={idx}>
+                       v{idx + 1} ({time})
+                     </option>
+                   );
+                 })}
+               </select>
+             </>
+           )}
+         </div>
          
          {/* Mini Toolbar */}
          <div className="flex items-center gap-2">
@@ -199,6 +234,23 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
                  <Loader2 className="w-8 h-8 text-slate-300 animate-spin" />
                  <span className="text-sm font-semibold text-slate-400 uppercase tracking-wide">Generating Visualization...</span>
               </div>
+           ) : selectedHistoryIndex !== null && plotHistory[selectedHistoryIndex] ? (
+              // Show historical image
+              <div 
+                className="relative transition-transform duration-200 ease-out origin-center select-none w-full h-full flex items-center justify-center"
+                style={{ transform: `scale(${zoomLevel})` }}
+              >
+                <img 
+                  src={`data:image/png;base64,${plotHistory[selectedHistoryIndex].base64}`}
+                  alt={`History v${selectedHistoryIndex + 1}`}
+                  className="max-w-full max-h-full object-contain"
+                />
+                {/* Version indicator */}
+                <div className="absolute top-2 left-2 bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 px-2 py-1 rounded text-[10px] font-semibold flex items-center gap-1">
+                  <History className="w-3 h-3" />
+                  v{selectedHistoryIndex + 1} - 历史版本
+                </div>
+              </div>
            ) : (
              <div 
                className="relative transition-transform duration-200 ease-out origin-center select-none w-full h-full flex items-center justify-center"
@@ -272,4 +324,6 @@ export const OutputPanel: React.FC<OutputPanelProps> = ({
       </div>
     </div>
   );
-};
+});
+
+OutputPanel.displayName = 'OutputPanel';

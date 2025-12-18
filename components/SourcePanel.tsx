@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { ImageUploader } from './ImageUploader';
 import { PlotImage, AnalysisStatus } from '../types';
 import { Play, Command, Zap, BrainCircuit, Wrench, Image as ImageIcon } from 'lucide-react';
@@ -21,7 +21,7 @@ interface SourcePanelProps {
   onShowToast?: (message: string, type: 'info' | 'success' | 'error') => void;
 }
 
-export const SourcePanel: React.FC<SourcePanelProps> = ({
+export const SourcePanel: React.FC<SourcePanelProps> = memo(({
   selectedImage,
   onImageSelected,
   status,
@@ -51,24 +51,27 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             <div className="flex p-0.5 bg-slate-200 dark:bg-zinc-800 rounded-md">
                 <button 
                   onClick={() => setRunMode('simple')}
-                  className={`px-2 py-1 rounded-[4px] text-[10px] font-bold transition-all ${runMode === 'simple' ? 'bg-white dark:bg-zinc-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
-                  title="Simple Mode"
+                  className={`flex items-center gap-1 px-2 py-1 rounded-[4px] text-[10px] font-bold transition-all ${runMode === 'simple' ? 'bg-white dark:bg-zinc-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                  title="Simple Mode - Single-pass generation, fast"
                 >
                    <Zap className="w-3 h-3" />
+                   <span>Simple</span>
                 </button>
                 <button 
                   onClick={() => setRunMode('complex')}
-                  className={`px-2 py-1 rounded-[4px] text-[10px] font-bold transition-all ${runMode === 'complex' ? 'bg-white dark:bg-zinc-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
-                  title="Complex Mode"
+                  className={`flex items-center gap-1 px-2 py-1 rounded-[4px] text-[10px] font-bold transition-all ${runMode === 'complex' ? 'bg-white dark:bg-zinc-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                  title="Complex Mode - Multi-agent review loop, high quality"
                 >
                    <BrainCircuit className="w-3 h-3" />
+                   <span>Complex</span>
                 </button>
                 <button 
                   onClick={() => setRunMode('manual')}
-                  className={`px-2 py-1 rounded-[4px] text-[10px] font-bold transition-all ${runMode === 'manual' ? 'bg-white dark:bg-zinc-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
-                  title="Manual Mode"
+                  className={`flex items-center gap-1 px-2 py-1 rounded-[4px] text-[10px] font-bold transition-all ${runMode === 'manual' ? 'bg-white dark:bg-zinc-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
+                  title="Manual Mode - Control loop count manually"
                 >
                    <Wrench className="w-3 h-3" />
+                   <span>Manual</span>
                 </button>
             </div>
 
@@ -144,4 +147,6 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
       </div>
     </div>
   );
-};
+});
+
+SourcePanel.displayName = 'SourcePanel';

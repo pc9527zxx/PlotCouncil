@@ -91,6 +91,20 @@ docker compose up -d
 # 访问 http://localhost:8032
 ```
 
+> ⚠️ **更新版本时请重新构建镜像**
+> 
+> 如果你之前已经构建过镜像，`docker compose up -d` 会使用缓存的旧版本。更新代码后请使用：
+> ```bash
+> git pull
+> docker compose up -d --build
+> ```
+> 或者彻底重建（清除旧镜像）：
+> ```bash
+> docker compose down
+> docker compose build --no-cache
+> docker compose up -d
+> ```
+
 Docker 部署包含：多阶段构建、自动前端构建、隔离 Python 环境、持久化 artifacts、健康检查、单端口服务。
 
 #### 方式二：手动安装

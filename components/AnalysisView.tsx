@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, memo, useMemo, useCallback } from 'react';
 import { AnalysisResult, AnalysisStatus, CodeVersion, WorkflowLogEntry, PlotSnapshot } from '../types';
-import { Terminal, Layers, Copy, FileJson, Bug, Gavel, Download, Loader2, Clock, CheckCircle, AlertCircle, AlertTriangle, Bot, Wrench, Send, Image as ImageIcon } from 'lucide-react';
+import { Terminal, Layers, Copy, FileJson, Bug, Gavel, Download, Loader2, Clock, CheckCircle, AlertCircle, AlertTriangle, Bot, Wrench, Send } from 'lucide-react';
 import { ToastType } from './Toast';
 import { CodeDiff } from './CodeDiff';
 
@@ -20,7 +20,7 @@ interface AnalysisViewProps {
 
 type TabType = 'code' | 'review' | 'logs';
 
-export const AnalysisView: React.FC<AnalysisViewProps> = ({
+export const AnalysisView: React.FC<AnalysisViewProps> = memo(({
   status,
   result,
   renderLogs,
@@ -320,54 +320,6 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
                            }
                         </pre>
                      </div>
-                   </div>
-                 </div>
-               )}
-
-               {/* Plot History Section */}
-               {plotHistory.length > 0 && !showDiff && (
-                 <div className="border-t border-slate-200 dark:border-zinc-800 p-3 bg-slate-50/50 dark:bg-zinc-900/50">
-                   <div className="flex items-center gap-2 mb-2">
-                     <ImageIcon className="w-3.5 h-3.5 text-slate-400" />
-                     <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase">图片历史 ({plotHistory.length})</span>
-                   </div>
-                   <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
-                     {plotHistory.map((snapshot, idx) => {
-                       const time = new Date(snapshot.created).toLocaleTimeString('zh-CN', {
-                         hour: '2-digit',
-                         minute: '2-digit',
-                         second: '2-digit',
-                       });
-                       return (
-                         <div key={snapshot.id} className="flex-none group relative">
-                           <div className="w-24 h-24 rounded border border-slate-200 dark:border-zinc-700 overflow-hidden bg-white dark:bg-zinc-800">
-                             <img
-                               src={`data:image/png;base64,${snapshot.base64}`}
-                               alt={`Render v${idx + 1}`}
-                               className="w-full h-full object-contain"
-                             />
-                           </div>
-                           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity rounded flex flex-col items-center justify-center gap-1">
-                             <span className="text-[9px] text-white/80">v{idx + 1}</span>
-                             <span className="text-[8px] text-white/60">{time}</span>
-                             <button
-                               onClick={() => {
-                                 const link = document.createElement('a');
-                                 link.href = `data:image/png;base64,${snapshot.base64}`;
-                                 const safeName = projectName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_').slice(0, 30);
-                                 link.download = `${safeName}_v${idx + 1}.png`;
-                                 link.click();
-                                 onShowToast(`图片 v${idx + 1} 已下载`, 'success');
-                               }}
-                               className="mt-1 p-1 rounded bg-white/20 hover:bg-white/30 transition-colors"
-                               title="下载此版本"
-                             >
-                               <Download className="w-3 h-3 text-white" />
-                             </button>
-                           </div>
-                         </div>
-                       );
-                     })}
                    </div>
                  </div>
                )}
@@ -912,4 +864,6 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
        </div>
     </div>
   );
-};
+});
+
+AnalysisView.displayName = 'AnalysisView';

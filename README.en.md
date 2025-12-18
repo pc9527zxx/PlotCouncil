@@ -92,6 +92,20 @@ docker compose up -d
 # Access at http://localhost:8032
 ```
 
+> ⚠️ **Rebuild images when updating**
+> 
+> If you've built the image before, `docker compose up -d` will use the cached old version. After pulling new code, use:
+> ```bash
+> git pull
+> docker compose up -d --build
+> ```
+> Or force a full rebuild (clears old images):
+> ```bash
+> docker compose down
+> docker compose build --no-cache
+> docker compose up -d
+> ```
+
 The Docker setup includes: multi-stage build, automatic frontend build and serving, isolated Python env, persistent artifacts, health checks, single port.
 
 #### Option 2: Manual Install

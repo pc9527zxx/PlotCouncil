@@ -1,5 +1,5 @@
 import { openDB, type DBSchema } from 'idb';
-import { Project, PlotSnapshot, PlotImage, AnalysisResult, CodeVersion, WorkflowLogEntry } from '../types';
+import { Project, ProjectGroup, PlotSnapshot, PlotImage, AnalysisResult, CodeVersion, WorkflowLogEntry } from '../types';
 
 export interface ModelConfig {
   id: string;
@@ -26,6 +26,7 @@ const META_ACTIVE_PROJECT_ID = 'activeProjectId';
 const META_MODEL_CONFIGS = 'modelConfigs';
 const META_SELECTED_CONFIG_ID = 'selectedConfigId';
 const META_MAX_LOOPS = 'maxLoops';
+const META_PROJECT_GROUPS = 'projectGroups';
 
 // Legacy localStorage keys (from earlier implementation)
 const LEGACY_PROJECTS_STORAGE_KEY = 'sciplot-projects-v1';
@@ -301,4 +302,17 @@ export const migrateLegacyIndexedDBToPlotCouncil = async (): Promise<boolean> =>
   } catch {
     return false;
   }
+};
+
+// === Project Groups Storage ===
+
+export const loadProjectGroups = async (): Promise<ProjectGroup[]> => {
+  const db = await dbPromise;
+  const meta = await db.get('meta', META_PROJECT_GROUPS);
+  return Array.isArray(meta?.value) ? meta.value as ProjectGroup[] : [];
+};
+
+export const saveProjectGroups = async (groups: ProjectGroup[]): Promise<void> => {
+  const db = await dbPromise;
+  await db.put('meta', { key: META_PROJECT_GROUPS, value: groups });
 };

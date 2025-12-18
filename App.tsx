@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AnalysisView } from './components/AnalysisView';
 import { OutputPanel } from './components/OutputPanel';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -8,7 +8,7 @@ import { DocsPanel } from './components/DocsPanel';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Toast, ToastItem, ToastType } from './components/Toast';
 import { analyzePlotImage, refinePlotAnalysis, quickFixError } from './services/geminiService';
-import { PlotImage, AnalysisResult, AnalysisStatus, AnalysisUpdate, Project, PlotSnapshot, CodeVersion, WorkflowLogEntry } from './types';
+import { PlotImage, AnalysisResult, AnalysisStatus, AnalysisUpdate, Project, ProjectGroup, PlotSnapshot, CodeVersion, WorkflowLogEntry } from './types';
 import { 
   loadProjectsSnapshot, 
   migrateLegacyLocalStorageToIDB, 
@@ -19,8 +19,11 @@ import {
   loadModelConfigs,
   saveModelConfigs,
   migrateModelConfigsFromLocalStorage,
+  loadProjectGroups,
+  saveProjectGroups,
   ModelConfig
 } from './services/projectStore';
+import { Language, t } from './services/i18n';
 import { Layout, ChevronLeft, ChevronRight } from 'lucide-react';
 
 // ModelConfig is now imported from projectStore
@@ -48,6 +51,7 @@ type ReviewPreset = 'lite' | 'full';
 export default function App() {
   // Theme & Settings State
   const [darkMode, setDarkMode] = useState(false);
+  const [language, setLanguage] = useState<Language>('zh');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDocsOpen, setIsDocsOpen] = useState(false);
   const [modelConfigs, setModelConfigs] = useState<ModelConfig[]>([]);
@@ -77,12 +81,18 @@ export default function App() {
   // Project State
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
+  
+  // Project Groups (Discord-style folders)
+  const [groups, setGroups] = useState<ProjectGroup[]>([]);
 
   // Per-project running tasks tracking (to allow concurrent generation)
   const runningTasksRef = useRef<Map<string, AbortController>>(new Map());
 
-  // Derived state from active project (for UI display)
-  const activeProject = projects.find(p => p.id === activeProjectId);
+  // Derived state from active project (for UI display) - memoized to avoid repeated lookups
+  const activeProject = useMemo(() => 
+    projects.find(p => p.id === activeProjectId), 
+    [projects, activeProjectId]
+  );
   const selectedImage = activeProject?.selectedImage ?? null;
   const status = activeProject?.status ?? AnalysisStatus.IDLE;
   const result = activeProject?.result ?? null;
@@ -264,6 +274,12 @@ export default function App() {
   // Execution Config
   const [runMode, setRunMode] = useState<RunMode>('simple');
   const [reviewPreset, setReviewPreset] = useState<ReviewPreset>('lite');
+  
+  // Refs to track latest values for async functions (避免闭包捕获旧值)
+  const runModeRef = useRef<RunMode>(runMode);
+  const reviewPresetRef = useRef<ReviewPreset>(reviewPreset);
+  useEffect(() => { runModeRef.current = runMode; }, [runMode]);
+  useEffect(() => { reviewPresetRef.current = reviewPreset; }, [reviewPreset]);
 
   // Auto-Refine State
   const [autoRefineEnabled, setAutoRefineEnabled] = useState(false);
@@ -276,6 +292,12 @@ export default function App() {
   const isRefiningRef = useRef(false);  // Lock to prevent duplicate refinements
   const loggedItemsRef = useRef<Set<string>>(new Set());  // Track logged items to avoid duplicates
   const lastRenderedHashRef = useRef<string>('');  // Track last rendered image to prevent duplicate callbacks
+  
+  // Refs for auto-refinement trigger (避免回调闭包捕获旧值)
+  const autoRefineEnabledRef = useRef(autoRefineEnabled);
+  const isFirstPassRef = useRef(isFirstPass);
+  useEffect(() => { autoRefineEnabledRef.current = autoRefineEnabled; }, [autoRefineEnabled]);
+  useEffect(() => { isFirstPassRef.current = isFirstPass; }, [isFirstPass]);
 
   const addToast = useCallback((message: string, type: ToastType = 'info') => {
     const id = Date.now().toString();
@@ -305,13 +327,24 @@ export default function App() {
 
   const clampLoops = (value: number) => Math.max(0, Math.min(8, value));
 
-  // Initialize theme
+  // Initialize theme and language
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       setDarkMode(true);
     }
+    // Load saved language preference
+    const savedLang = localStorage.getItem('plotcouncil-language') as Language | null;
+    if (savedLang === 'en' || savedLang === 'zh') {
+      setLanguage(savedLang);
+    }
   }, []);
+
+  // Save language preference
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('plotcouncil-language', language);
+  }, [language]);
 
   // Load model configs from IndexedDB
   const [modelConfigsLoaded, setModelConfigsLoaded] = useState(false);
@@ -331,11 +364,14 @@ export default function App() {
     })();
   }, []);
 
-  // Save model configs to IndexedDB
+  // Save model configs to IndexedDB (debounced for slider performance)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (!modelConfigsLoaded) return; // Don't save until initial load is complete
-    saveModelConfigs(modelConfigs, selectedConfigId || null, maxAutoLoops).catch(() => {});
+    const timer = setTimeout(() => {
+      saveModelConfigs(modelConfigs, selectedConfigId || null, maxAutoLoops).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
   }, [modelConfigs, selectedConfigId, maxAutoLoops, modelConfigsLoaded]);
 
   // Load projects
@@ -348,6 +384,12 @@ export default function App() {
         await migrateLegacyIndexedDBToPlotCouncil();
         const snapshot = await loadProjectsSnapshot();
         const initialProjects = snapshot.projects.length ? snapshot.projects : [];
+        
+        // Load groups
+        const loadedGroups = await loadProjectGroups();
+        if (!cancelled) {
+          setGroups(loadedGroups);
+        }
         
         if (initialProjects.length === 0) {
            if (cancelled) return;
@@ -379,39 +421,56 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Auto-save
+  // Auto-save projects (debounced to reduce IDB writes)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (!activeProjectId) return;
     if (!projects.length) return;
     const handle = window.setTimeout(() => {
       saveProjectsSnapshot(projects, activeProjectId).catch(() => {});
-    }, 250);
+    }, 1000); // Increased debounce for better performance
     return () => window.clearTimeout(handle);
   }, [projects, activeProjectId]);
 
+  // Auto-save groups (debounced)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handle = window.setTimeout(() => {
+      saveProjectGroups(groups).catch(() => {});
+    }, 1000);
+    return () => window.clearTimeout(handle);
+  }, [groups]);
+
   // switchProject now just changes the activeProjectId - no state copying needed!
   // The UI will automatically reflect the new project's state through derived values
-  const switchProject = (projectId: string) => {
-    const next = projects.find(p => p.id === projectId);
-    if (!next) return;
+  const switchProject = useCallback((projectId: string) => {
+    setProjects(prev => {
+      const next = prev.find(p => p.id === projectId);
+      if (!next) return prev;
+      return prev; // No modification needed, just validates existence
+    });
     // Just switch the active project - don't interrupt any running tasks
     setActiveProjectId(projectId);
     // Reset UI-only state
     setIsFirstPass(false);
     updateLoopBudget(0);
     errorFixCountRef.current = 0;
-  };
+  }, []);
 
-  const createNewProject = () => {
-    const nextIndex = projects.length + 1;
-    const project = createEmptyProject(`Project ${nextIndex}`);
-    setProjects(prev => [project, ...prev]);
-    switchProject(project.id);
-    addToast('New project created', 'success');
-  };
+  const createNewProject = useCallback(() => {
+    setProjects(prev => {
+      const nextIndex = prev.length + 1;
+      const project = createEmptyProject(`Project ${nextIndex}`);
+      setActiveProjectId(project.id);
+      setIsFirstPass(false);
+      updateLoopBudget(0);
+      errorFixCountRef.current = 0;
+      addToast('New project created', 'success');
+      return [project, ...prev];
+    });
+  }, [addToast]);
 
-  const renameProject = (projectId: string, name: string) => {
+  const renameProject = useCallback((projectId: string, name: string) => {
     const nextName = name.trim();
     if (!nextName) return;
     setProjects(prev => prev.map(p => {
@@ -420,7 +479,74 @@ export default function App() {
       return { ...p, name: nextName };
     }));
     addToast('Project renamed', 'success');
-  };
+  }, [addToast]);
+
+  // === Group Management Functions (memoized for performance) ===
+  const createGroup = useCallback(() => {
+    const newGroup: ProjectGroup = {
+      id: crypto.randomUUID(),
+      name: `分组 ${groups.length + 1}`,
+      collapsed: false,
+      createdAt: Date.now()
+    };
+    setGroups(prev => [...prev, newGroup]);
+    addToast('分组已创建', 'success');
+  }, [groups.length, addToast]);
+
+  const deleteGroup = useCallback((groupId: string) => {
+    // Move all projects in this group to ungrouped
+    setProjects(prev => prev.map(p => 
+      p.groupId === groupId ? { ...p, groupId: undefined } : p
+    ));
+    setGroups(prev => prev.filter(g => g.id !== groupId));
+    addToast('分组已删除', 'success');
+  }, [addToast]);
+
+  const renameGroup = useCallback((groupId: string, name: string) => {
+    const nextName = name.trim();
+    if (!nextName) return;
+    setGroups(prev => prev.map(g => 
+      g.id === groupId ? { ...g, name: nextName } : g
+    ));
+  }, []);
+
+  const toggleGroupCollapse = useCallback((groupId: string) => {
+    setGroups(prev => prev.map(g => 
+      g.id === groupId ? { ...g, collapsed: !g.collapsed } : g
+    ));
+  }, []);
+
+  const moveProjectToGroup = useCallback((projectId: string, groupId: string | null) => {
+    setProjects(prev => prev.map(p => 
+      p.id === projectId ? { ...p, groupId: groupId ?? undefined } : p
+    ));
+  }, []);
+
+  const batchDeleteProjects = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    
+    setProjects(prev => {
+      const remaining = prev.filter(p => !ids.includes(p.id));
+      // If active project is being deleted, switch to another
+      if (ids.includes(activeProjectId)) {
+        if (remaining.length > 0) {
+          setActiveProjectId(remaining[0].id);
+        } else {
+          setActiveProjectId('');
+        }
+      }
+      return remaining;
+    });
+    addToast(`已删除 ${ids.length} 个项目`, 'success');
+  }, [activeProjectId, addToast]);
+
+  const batchMoveProjects = useCallback((ids: string[], groupId: string | null) => {
+    setProjects(prev => prev.map(p => 
+      ids.includes(p.id) ? { ...p, groupId: groupId ?? undefined } : p
+    ));
+    const groupName = groupId ? groups.find(g => g.id === groupId)?.name : '未分组';
+    addToast(`已移动 ${ids.length} 个项目到 ${groupName}`, 'success');
+  }, [groups, addToast]);
 
   const handleImageSelected = (image: PlotImage | null) => {
     if (!activeProjectId) return;
@@ -457,34 +583,43 @@ export default function App() {
         return;
     }
 
-    // Capture project ID to use throughout the async operation
+    // Capture project ID and current mode settings to use throughout the async operation
     const projectId = activeProjectId;
     const projectImage = selectedImage;
+    const currentRunMode = runModeRef.current;  // 使用 ref 获取最新值
+    const currentReviewPreset = reviewPresetRef.current;  // 使用 ref 获取最新值
 
     // Clear logs and start fresh
     clearWorkflowLogs(projectId);
-    addWorkflowLog(projectId, 'info', '开始分析流程', undefined, `运行模式: ${runMode}, 审查预设: ${reviewPreset}`);
+    addWorkflowLog(projectId, 'info', '开始分析流程', undefined, `运行模式: ${currentRunMode}, 审查预设: ${currentReviewPreset}`);
     addWorkflowLog(projectId, 'info', `使用模型: ${currentConfig?.modelId || '默认'}`);
 
+    // 重要：清除旧的渲染结果，确保新代码会触发渲染
     updateProject(projectId, {
       status: AnalysisStatus.ANALYZING,
       errorMessage: '',
       result: null,
       codeHistory: [],  // Clear code history on new analysis
+      generatedPlotBase64: null,  // 清除旧图片，确保 autorun 生效
       generatedSvgBase64: null,  // Clear SVG
+      renderLogs: '',  // 清除旧日志
+      renderError: '',  // 清除旧错误
     });
     errorFixCountRef.current = 0;
     autoTriggerPendingRef.current = false;  // Reset auto-trigger flag
     lastRenderedHashRef.current = '';  // Reset render hash for new analysis
     
-    const initialBudget = runMode === 'simple' 
+    const initialBudget = currentRunMode === 'simple' 
       ? 0 
-      : (runMode === 'complex' ? 1 : maxAutoLoops);
+      : (currentRunMode === 'complex' ? 1 : maxAutoLoops);
       
     updateLoopBudget(initialBudget);
     
-    setIsFirstPass(runMode !== 'simple'); 
-    setAutoRefineEnabled(runMode !== 'simple');
+    const shouldAutoRefine = currentRunMode !== 'simple';
+    setIsFirstPass(shouldAutoRefine);
+    isFirstPassRef.current = shouldAutoRefine;  // 同步更新 ref
+    setAutoRefineEnabled(shouldAutoRefine);
+    autoRefineEnabledRef.current = shouldAutoRefine;  // 同步更新 ref
     
     setIsCapturing(false);
 
@@ -552,20 +687,21 @@ export default function App() {
     loggedItemsRef.current.clear();  // Clear logged items for this refinement session
     console.log('[handleRefine] Started');
     
-    // Capture project context for async operation
+    // Capture project context and current settings for async operation
     const projectId = activeProjectId;
     const projectImage = selectedImage;
     const projectResult = result;
+    const currentReviewPreset = reviewPresetRef.current;  // 使用 ref 获取最新值
     
     const codeMatch = projectResult.markdown.match(/```python([\s\S]*?)```/);
     const currentCode = codeMatch ? codeMatch[1].trim() : (projectResult.markdown.includes('import matplotlib') ? projectResult.markdown : '');
     const triggeredByAuto = pendingAutoRef.current;
 
-    addWorkflowLog(projectId, 'info', `开始审查流程 (${reviewPreset === 'lite' ? 'Lite' : 'Full'} 模式)`, undefined, 
+    addWorkflowLog(projectId, 'info', `开始审查流程 (${currentReviewPreset === 'lite' ? 'Lite' : 'Full'} 模式)`, undefined, 
       feedbackType === 'image' ? '渲染成功，进入审查' : '渲染出错，错误诊断模式');
 
     updateProject(projectId, {
-      status: reviewPreset === 'lite' ? AnalysisStatus.CHAIR_QA : AnalysisStatus.TEACHER_STYLE_REVIEW,
+      status: currentReviewPreset === 'lite' ? AnalysisStatus.CHAIR_QA : AnalysisStatus.TEACHER_STYLE_REVIEW,
       errorMessage: '',
     });
 
@@ -627,7 +763,7 @@ export default function App() {
             }
           }
         },
-        { preset: reviewPreset },
+        { preset: currentReviewPreset },
         currentConfig?.baseUrl || undefined
       );
       // Refresh downstream render with new code
@@ -680,10 +816,19 @@ export default function App() {
   const autoTriggerPendingRef = useRef(false);  // Prevent duplicate auto-trigger calls
   
   const handleAutoRefinementTrigger = async (renderedImageBase64: string) => {
-    if (runMode === 'simple') return;
+    if (runModeRef.current === 'simple') return;  // 使用 ref
     
     if (!currentConfig?.apiKey) return;
-    if (!autoRefineEnabled || !isFirstPass || !selectedImage || !result || loopBudgetRef.current <= 0) return;
+    
+    // 使用 refs 获取最新值，避免闭包问题
+    if (!autoRefineEnabledRef.current || !isFirstPassRef.current || loopBudgetRef.current <= 0) {
+      console.log('[handleAutoRefinementTrigger] Skipped - conditions not met:', {
+        autoRefineEnabled: autoRefineEnabledRef.current,
+        isFirstPass: isFirstPassRef.current,
+        loopBudget: loopBudgetRef.current
+      });
+      return;
+    }
     
     // Prevent duplicate triggers
     if (autoTriggerPendingRef.current) {
@@ -692,7 +837,8 @@ export default function App() {
     }
     autoTriggerPendingRef.current = true;
     
-    setIsFirstPass(false); 
+    setIsFirstPass(false);
+    isFirstPassRef.current = false;  // 同步更新 ref
     setIsCapturing(true); 
     addToast(`Auto-refining... (${loopBudgetRef.current} loops left)`, "info");
     if (activeProjectId) {
@@ -712,11 +858,18 @@ export default function App() {
   };
 
   const handleAutoRefinementErrorTrigger = async (errorText: string) => {
-    if (runMode === 'simple') return;
+    if (runModeRef.current === 'simple') return;  // 使用 ref
 
     if (!currentConfig?.apiKey) return;
-    if (!autoRefineEnabled || !isFirstPass || !selectedImage || !result || loopBudgetRef.current <= 0) return;
-    setIsFirstPass(false); 
+    
+    // 使用 refs 获取最新值
+    if (!autoRefineEnabledRef.current || !isFirstPassRef.current || loopBudgetRef.current <= 0) {
+      console.log('[handleAutoRefinementErrorTrigger] Skipped - conditions not met');
+      return;
+    }
+    
+    setIsFirstPass(false);
+    isFirstPassRef.current = false;  // 同步更新 ref
     setIsCapturing(true);
     pendingAutoRef.current = true;
     updateLoopBudget(prev => Math.max(prev - 1, 0));
@@ -877,41 +1030,69 @@ export default function App() {
     errorFixCountRef.current = 0;
   };
 
-  // --- Resizing Logic ---
+  // --- Resizing Logic (optimized with RAF throttle) ---
+  const rafRef = useRef<number | null>(null);
+  const pendingMousePos = useRef<{ x: number; y: number } | null>(null);
+
   const handleMouseDown = (type: 'horizontal' | 'vertical') => (e: React.MouseEvent) => {
     setIsResizing(type);
     e.preventDefault();
   };
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing || !mainRef.current) return;
+    const processResize = () => {
+      if (!pendingMousePos.current || !mainRef.current) {
+        rafRef.current = null;
+        return;
+      }
+      
+      const { x, y } = pendingMousePos.current;
       
       if (isResizing === 'horizontal') {
         const containerRect = mainRef.current.getBoundingClientRect();
-        const newWidth = ((e.clientX - containerRect.left) / containerRect.width) * 100;
+        const newWidth = ((x - containerRect.left) / containerRect.width) * 100;
         const constrainedWidth = Math.max(20, Math.min(80, newWidth));
         setLeftPanelWidth(constrainedWidth);
       } else if (isResizing === 'vertical' && leftColRef.current) {
         const containerRect = leftColRef.current.getBoundingClientRect();
-        const newHeight = ((e.clientY - containerRect.top) / containerRect.height) * 100;
+        const newHeight = ((y - containerRect.top) / containerRect.height) * 100;
         const constrainedHeight = Math.max(20, Math.min(80, newHeight));
         setSourcePanelHeight(constrainedHeight);
+      }
+      
+      pendingMousePos.current = null;
+      rafRef.current = null;
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      pendingMousePos.current = { x: e.clientX, y: e.clientY };
+      
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(processResize);
       }
     };
 
     const handleMouseUp = () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      pendingMousePos.current = null;
       setIsResizing(null);
     };
 
     if (isResizing) {
-      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mousemove', handleMouseMove, { passive: true });
       window.addEventListener('mouseup', handleMouseUp);
     }
 
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+      }
     };
   }, [isResizing]);
 
@@ -999,6 +1180,18 @@ export default function App() {
         modelConfigs={modelConfigs}
         selectedConfigId={selectedConfigId}
         onSelectConfig={setSelectedConfigId}
+        // Group management
+        groups={groups}
+        onCreateGroup={createGroup}
+        onDeleteGroup={deleteGroup}
+        onRenameGroup={renameGroup}
+        onToggleGroupCollapse={toggleGroupCollapse}
+        onMoveProjectToGroup={moveProjectToGroup}
+        onBatchDeleteProjects={batchDeleteProjects}
+        onBatchMoveProjects={batchMoveProjects}
+        // Language
+        language={language}
+        onToggleLanguage={() => setLanguage(language === 'zh' ? 'en' : 'zh')}
       />
 
       {/* 2. Main Content Area */}
@@ -1013,16 +1206,17 @@ export default function App() {
           <div 
             ref={mainRef}
             className="flex-1 flex overflow-hidden relative"
+            style={{ contain: 'layout style' }}
           >
              
              {/* LEFT COLUMN: Visuals (Source + Output) */}
              <div 
                ref={leftColRef}
-               style={{ width: `${leftPanelWidth}%` }} 
-               className="flex flex-col min-w-[300px] h-full bg-slate-50 dark:bg-zinc-950 border-r border-slate-200 dark:border-zinc-800 shrink-0 transition-all duration-75 relative"
+               style={{ width: `${leftPanelWidth}%`, contain: 'layout' }} 
+               className="flex flex-col min-w-[300px] h-full bg-slate-50 dark:bg-zinc-950 border-r border-slate-200 dark:border-zinc-800 shrink-0 relative"
              >
                 {/* Top: Source Image */}
-                <div style={{ height: `${sourcePanelHeight}%` }} className="flex-shrink-0 min-h-[200px] flex flex-col">
+                <div style={{ height: `${sourcePanelHeight}%`, contain: 'layout' }} className="flex-shrink-0 min-h-[200px] flex flex-col">
                   <SourcePanel 
                     selectedImage={selectedImage}
                     onImageSelected={handleImageSelected}
@@ -1041,14 +1235,14 @@ export default function App() {
 
                 {/* Vertical Splitter Handle */}
                 <div 
-                  className="h-1.5 w-full cursor-row-resize bg-slate-100 dark:bg-zinc-800 hover:bg-indigo-500 hover:scale-y-110 transition-all z-20 flex items-center justify-center group -mt-[1px]"
+                  className="h-1.5 w-full cursor-row-resize bg-slate-100 dark:bg-zinc-800 hover:bg-indigo-500 hover:scale-y-110 transition-transform z-20 flex items-center justify-center group -mt-[1px]"
                   onMouseDown={handleMouseDown('vertical')}
                 >
                    <div className="w-8 h-1 bg-slate-300 dark:bg-zinc-700 rounded-full group-hover:bg-white/50" />
                 </div>
 
                 {/* Bottom: Output Plot */}
-                <div className="flex-1 min-h-0 flex flex-col border-t border-slate-200 dark:border-zinc-800">
+                <div className="flex-1 min-h-0 flex flex-col border-t border-slate-200 dark:border-zinc-800" style={{ contain: 'layout' }}>
                   <OutputPanel 
                     status={status}
                     generatedPlotBase64={generatedPlotBase64}
@@ -1074,10 +1268,10 @@ export default function App() {
                       }
                       // Reset error fix counter on successful render
                       errorFixCountRef.current = 0;
-                      if (runMode !== 'simple') handleAutoRefinementTrigger(base64);
+                      if (runModeRef.current !== 'simple') handleAutoRefinementTrigger(base64);
                     }}
                     onPlotRuntimeError={(errorText) => {
-                      if (runMode !== 'simple') {
+                      if (runModeRef.current !== 'simple') {
                         handleAutoRefinementErrorTrigger(errorText);
                         return;
                       }
@@ -1089,6 +1283,7 @@ export default function App() {
                     onShowToast={addToast}
                     projectName={activeProject?.name || 'plot'}
                     codeIteration={(activeProject?.codeHistory?.length || 0)}
+                    plotHistory={plotHistory}
                   />
                 </div>
              </div>
@@ -1111,7 +1306,7 @@ export default function App() {
              </div>
 
              {/* RIGHT COLUMN: Inspector (Code/Review/Logs) */}
-             <div className="flex-1 min-w-0 h-full bg-white dark:bg-zinc-900 flex flex-col">
+             <div className="flex-1 min-w-0 h-full bg-white dark:bg-zinc-900 flex flex-col" style={{ contain: 'layout' }}>
                 <AnalysisView 
                   key={activeProjectId}
                   status={status}
@@ -1120,7 +1315,7 @@ export default function App() {
                   renderError={renderError}
                   workflowLogs={workflowLogs}
                   onShowToast={addToast}
-                  codeHistory={projects.find(p => p.id === activeProjectId)?.codeHistory || []}
+                  codeHistory={activeProject?.codeHistory || []}
                   plotHistory={plotHistory}
                   projectName={activeProject?.name || 'plot'}
                   onManualFix={handleManualFix}
