@@ -96,9 +96,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8032
 </code></pre>
-      <p><strong>配置</strong></p>
-      <pre><code>VITE_RENDER_API_URL=http://localhost:8032/render
-# 在应用 Settings 粘贴 Gemini API Key</code></pre>
       <h3>注意</h3>
       <ul>
         <li>后端执行任意 Matplotlib 代码，公网部署请加沙箱/限时。</li>
@@ -142,9 +139,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8032
 </code></pre>
-      <p><strong>Config</strong></p>
-      <pre><code>VITE_RENDER_API_URL=http://localhost:8032/render
-# Paste Gemini API Key in app Settings</code></pre>
       <h3>Notes</h3>
       <ul>
         <li>Renderer executes arbitrary Matplotlib; sandbox/timeout for public exposure.</li>

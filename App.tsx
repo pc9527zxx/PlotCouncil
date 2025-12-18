@@ -4,8 +4,10 @@ import { OutputPanel } from './components/OutputPanel';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { SourcePanel } from './components/SourcePanel';
 import { SettingsModal } from './components/SettingsModal';
+import { SettingsPanel } from './components/SettingsPanel';
 import { DocsPanel } from './components/DocsPanel';
 import { ConfirmDialog } from './components/ConfirmDialog';
+import { MenuBar } from './components/MenuBar';
 import { Toast, ToastItem, ToastType } from './components/Toast';
 import { analyzePlotImage, refinePlotAnalysis, quickFixError } from './services/geminiService';
 import { PlotImage, AnalysisResult, AnalysisStatus, AnalysisUpdate, Project, ProjectGroup, PlotSnapshot, CodeVersion, WorkflowLogEntry } from './types';
@@ -61,13 +63,14 @@ export default function App() {
   const currentConfig = modelConfigs.find(c => c.id === selectedConfigId) || null;
 
   // Layout State
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(260); // Pixels for sidebar
   const [leftPanelWidth, setLeftPanelWidth] = useState(50); // Percentage
   // FIX 1 & 2: Default height reduced to 35% for Input Source
   const [sourcePanelHeight, setSourcePanelHeight] = useState(35); // Percentage of left panel
-  const [isResizing, setIsResizing] = useState<'horizontal' | 'vertical' | null>(null);
+  const [isResizing, setIsResizing] = useState<'horizontal' | 'vertical' | 'sidebar' | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const leftColRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Toast State
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -1082,21 +1085,26 @@ export default function App() {
   const rafRef = useRef<number | null>(null);
   const pendingMousePos = useRef<{ x: number; y: number } | null>(null);
 
-  const handleMouseDown = (type: 'horizontal' | 'vertical') => (e: React.MouseEvent) => {
+  const handleMouseDown = (type: 'horizontal' | 'vertical' | 'sidebar') => (e: React.MouseEvent) => {
     setIsResizing(type);
     e.preventDefault();
   };
 
   useEffect(() => {
     const processResize = () => {
-      if (!pendingMousePos.current || !mainRef.current) {
+      if (!pendingMousePos.current) {
         rafRef.current = null;
         return;
       }
       
       const { x, y } = pendingMousePos.current;
       
-      if (isResizing === 'horizontal') {
+      if (isResizing === 'sidebar' && containerRef.current) {
+        const containerRect = containerRef.current.getBoundingClientRect();
+        const newWidth = x - containerRect.left;
+        const constrainedWidth = Math.max(200, Math.min(400, newWidth));
+        setSidebarWidth(constrainedWidth);
+      } else if (isResizing === 'horizontal' && mainRef.current) {
         const containerRect = mainRef.current.getBoundingClientRect();
         const newWidth = ((x - containerRect.left) / containerRect.width) * 100;
         const constrainedWidth = Math.max(20, Math.min(80, newWidth));
@@ -1159,11 +1167,37 @@ export default function App() {
   }, [result]);
 
   return (
-    // FIX 1: h-screen and overflow-hidden on root
     <div 
-      className={`h-screen w-screen overflow-hidden font-sans flex ${darkMode ? 'dark bg-zinc-950 text-slate-200' : 'bg-slate-50 text-slate-900'}`}
-      style={{ contain: 'layout' }}
+      className={`h-screen w-screen overflow-hidden font-sans flex flex-col ${darkMode ? 'dark bg-zinc-950 text-slate-200' : 'bg-slate-50 text-slate-900'}`}
     >
+      {/* Top Menu Bar */}
+      <MenuBar
+        onNewProject={createNewProject}
+        onNewGroup={createGroup}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenDocs={() => setIsDocsOpen(true)}
+        darkMode={darkMode}
+        onToggleTheme={() => setDarkMode(!darkMode)}
+        language={language}
+        onToggleLanguage={() => setLanguage(language === 'zh' ? 'en' : 'zh')}
+        modelConfigs={modelConfigs}
+        selectedConfigId={selectedConfigId}
+        onSelectConfig={setSelectedConfigId}
+        onStartAnalysis={handleAnalyze}
+        onStopAnalysis={() => {
+          const controller = runningTasksRef.current.get(activeProjectId);
+          if (controller) controller.abort();
+        }}
+        isRunning={isWorkflowBusy}
+        canRun={!!selectedImage && !!currentConfig?.apiKey}
+        projectName={activeProject?.name}
+      />
+      
+      {/* Main content area with sidebar and splitter */}
+      <div 
+        ref={containerRef}
+        className="flex-1 flex overflow-hidden"
+      >
       
       {/* Toast Layer */}
       <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 pointer-events-none">
@@ -1212,41 +1246,62 @@ export default function App() {
         variant="danger"
       />
 
-      {/* 1. Sidebar */}
-      <ProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onSelectProject={switchProject}
-        onCreateProject={createNewProject}
-        onDeleteProject={(id) => {
-          setDeleteConfirm({ isOpen: true, projectId: id });
-        }}
-        onRenameProject={renameProject}
-        onOpenDocs={() => setIsDocsOpen(true)}
-        darkMode={darkMode}
-        onToggleTheme={() => setDarkMode(!darkMode)}
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        modelConfigs={modelConfigs}
-        selectedConfigId={selectedConfigId}
-        onSelectConfig={setSelectedConfigId}
-        // Group management
-        groups={groups}
-        onCreateGroup={createGroup}
-        onDeleteGroup={deleteGroup}
-        onRenameGroup={renameGroup}
-        onToggleGroupCollapse={toggleGroupCollapse}
-        onMoveProjectToGroup={moveProjectToGroup}
-        onBatchDeleteProjects={batchDeleteProjects}
-        onBatchMoveProjects={batchMoveProjects}
-        // Language
-        language={language}
-        onToggleLanguage={() => setLanguage(language === 'zh' ? 'en' : 'zh')}
-      />
+      {/* 1. Sidebar - switches between ProjectSidebar and SettingsPanel */}
+      <div 
+        style={{ width: `${sidebarWidth}px`, minWidth: '200px', maxWidth: '400px' }} 
+        className="h-full shrink-0 border-r border-slate-200 dark:border-zinc-800"
+      >
+        {isSettingsOpen ? (
+          <SettingsPanel
+            onBack={() => setIsSettingsOpen(false)}
+            selectedConfigId={selectedConfigId}
+            setSelectedConfigId={setSelectedConfigId}
+            modelConfigs={modelConfigs}
+            setModelConfigs={setModelConfigs}
+            darkMode={darkMode}
+            toggleTheme={() => setDarkMode(!darkMode)}
+            language={language}
+            toggleLanguage={() => setLanguage(language === 'zh' ? 'en' : 'zh')}
+          />
+        ) : (
+          <ProjectSidebar
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelectProject={switchProject}
+            onCreateProject={createNewProject}
+            onDeleteProject={(id) => {
+              setDeleteConfirm({ isOpen: true, projectId: id });
+            }}
+            onRenameProject={renameProject}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            modelConfigs={modelConfigs}
+            selectedConfigId={selectedConfigId}
+            onSelectConfig={setSelectedConfigId}
+            // Group management
+            groups={groups}
+            onCreateGroup={createGroup}
+            onDeleteGroup={deleteGroup}
+            onRenameGroup={renameGroup}
+            onToggleGroupCollapse={toggleGroupCollapse}
+            onMoveProjectToGroup={moveProjectToGroup}
+            onBatchDeleteProjects={batchDeleteProjects}
+            onBatchMoveProjects={batchMoveProjects}
+            // Language
+            language={language}
+          />
+        )}
+      </div>
+
+      {/* Sidebar Splitter Handle */}
+      <div 
+        className="w-1.5 h-full cursor-col-resize hover:bg-indigo-500 transition-colors bg-slate-100 dark:bg-zinc-900 z-30 flex flex-col justify-center items-center group shrink-0"
+        onMouseDown={handleMouseDown('sidebar')}
+      >
+        <div className="h-8 w-1 bg-slate-300/50 dark:bg-zinc-700/50 rounded-full group-hover:bg-indigo-300 absolute" />
+      </div>
 
       {/* 2. Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 h-full transform-gpu" style={{ contain: 'strict' }}>
+      <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         
         {projects.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-slate-400 dark:text-slate-500">
@@ -1381,6 +1436,7 @@ export default function App() {
           </div>
         )}
       </main>
+      </div>
     </div>
   );
 }
